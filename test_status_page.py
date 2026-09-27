@@ -10,14 +10,18 @@ mts = [{"id": "a", "dimensions": dims("coredns", "dns")},
        {"id": "e", "dimensions": dims("fluxcd", "deploy")},
        # same check from two nodes (agent pod rescheduled; collector adds host dims)
        {"id": "f", "dimensions": {**dims("traefik", "deploy"), "host.name": "node-1"}},
-       {"id": "g", "dimensions": {**dims("traefik", "deploy"), "host.name": "node-2"}}]
+       {"id": "g", "dimensions": {**dims("traefik", "deploy"), "host.name": "node-2"}},
+       # a whole cluster whose agent has gone silent
+       {"id": "z", "dimensions": {"cluster": "c2", "service": "coredns", "check": "dns"}}]
 data = {"a": [[now - 5000, 1]], "b": [[now - 70000, 1], [now - 5000, 0]],
         "c": [[now - STALE_AFTER * 1000 - 1, 1]], "e": [[now - 5000, 1], [now - 1000, None]],
         "f": [[now - STALE_AFTER * 5000, 0]], "g": [[now - 5000, 1]]}
-s = summarize(mts, data, now)["c1"]
+summary = summarize(mts, data, now)
+s = summary["c1"]
 assert s["coredns"]["state"] == "down", s["coredns"]
 assert s["cilium"]["state"] == "stale"
-assert s["argocd"]["state"] == "stale"  # never reported
+assert "argocd" not in s  # no data in the window while c1 reports: removed from checks.json, dropped
+assert summary["c2"]["coredns"]["state"] == "stale"  # whole cluster silent: kept, shown as stale
 assert s["fluxcd"]["state"] == "up"
 assert s["traefik"]["state"] == "up" and len(s["traefik"]["checks"]) == 1  # old node's MTS merged away
 
@@ -37,7 +41,7 @@ status_page.status = lambda: {"generated_ms": now, "overall": "down", "headline"
                                              "active": True, "started_ms": now - 60000, "updated_ms": now, "url": "#"}]}
 client = status_page.app.test_client()
 page = client.get("/").get_data(as_text=True)
-for text in ("1 service down", "argocd", "Operation in last", "99.75%", "bar partial", "bar nodata",
+for text in ("1 service down", "cilium", "Operation in last", "99.75%", "bar partial", "bar nodata",
              "EKS service down", "ongoing since", "<code>deploy</code>"):
     assert text in page, text
 assert client.get("/api/status").json["headline"] == "1 service down"

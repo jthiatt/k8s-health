@@ -45,14 +45,19 @@ def check_key(d):
 def summarize(mts, data, now_ms):
     """-> {cluster: {service: {"state", "checks": [{"check", "state", "last_ms"}]}}}
     The OTel collector adds host dims, so one check becomes a new MTS each time the agent pod changes
-    node; merge MTS by (cluster, service, check) and keep the newest point."""
+    node; merge MTS by (cluster, service, check) and keep the newest point.
+    A check with no data in the whole window, while its cluster's agent is still reporting other checks,
+    was removed from checks.json: drop it. If the whole cluster is silent, everything shows as stale."""
     latest = {}
     for m in mts:
         key = check_key(m["dimensions"])
         points = [p for p in data.get(m["id"], []) if p[1] is not None]
         latest[key] = max([latest.get(key, (0, None)), *points], key=lambda p: p[0])
+    live = {cluster for (cluster, _, _), (last_ms, _) in latest.items() if now_ms - last_ms <= STALE_AFTER * 1000}
     clusters = {}
     for (cluster, service, check), (last_ms, value) in latest.items():
+        if not last_ms and cluster in live:
+            continue
         state = "stale" if now_ms - last_ms > STALE_AFTER * 1000 else "up" if value >= 1 else "down"
         svc = clusters.setdefault(cluster, {}).setdefault(service, {"checks": []})
         svc["checks"].append({"check": check, "state": state, "last_ms": last_ms})

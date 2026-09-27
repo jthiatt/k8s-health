@@ -146,6 +146,7 @@ The page and the agents must use the same `INTERVAL_SECONDS`, or the page will m
 | Status page pod is `OOMKilled` | The 30-day history query grew too big (many clusters × checks). Raise the memory limit in `deploy/status-page.yaml` or lower `HISTORY_DAYS`. |
 | History bars are all grey for a new install | Expected. History only starts once the agents start reporting. |
 | Healthy checks flip to **stale** | `INTERVAL_SECONDS` here is lower than the agents' interval. |
+| A check removed from `checks.json` still shows | Expected for up to about 15 minutes (5 × `STALE_AFTER_SECONDS`). A check with no data in that window is dropped, as long as other checks from the same cluster are still reporting. If a whole cluster goes silent, all its checks stay visible as **stale**. |
 | No incidents listed although detectors fired | The detector names don't contain `DETECTOR_MATCH` (`eks` in the manifest). |
 
 ## Development
