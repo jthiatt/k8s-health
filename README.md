@@ -149,6 +149,55 @@ The page and the agents must use the same `INTERVAL_SECONDS`, or the page will m
 | A check removed from `checks.json` still shows | Expected for up to about 15 minutes (5 × `STALE_AFTER_SECONDS`). A check with no data in that window is dropped, as long as other checks from the same cluster are still reporting. If a whole cluster goes silent, all its checks stay visible as **stale**. |
 | No incidents listed although detectors fired | The detector names don't contain `DETECTOR_MATCH` (`eks` in the manifest). |
 
+## Testing on minikube
+
+Run the page inside minikube, from its real image and `deploy/` manifests, against the agent's minikube setup. No registry is needed.
+
+**Prerequisites:**
+- The agent, the Splunk OTel Collector and Argo CD running on minikube, as in the [eks-health-agent README's "Testing on minikube"](https://github.com/jthiatt/eks-health-agent#testing-on-minikube).
+- The detector applied (`splunk/` in the agent repo). Without it, the incident timeline stays empty.
+
+**1. Store a read-only token.** Create an org token with only the **API** scope (Settings → Access Tokens), then:
+
+```bash
+kubectl -n eks-status create secret generic splunk-api --from-literal=token=<API_TOKEN>
+```
+
+**2. Build the image inside minikube.** This puts it straight into minikube's container runtime:
+
+```bash
+minikube image build -t eks-status-page:dev .
+```
+
+**3. Deploy** with the `dev` image in place of the registry placeholder:
+
+```bash
+kubectl kustomize deploy | sed 's|image: <your-registry>/eks-status-page:0.1.0|image: eks-status-page:dev|' | kubectl apply -f -
+kubectl -n eks-status rollout status deploy/eks-status-page
+kubectl -n eks-status port-forward svc/eks-status-page 8080:80   # open http://localhost:8080
+```
+
+**To test a code change:** rebuild under a **new tag** and point the Deployment at it. Reusing a tag doesn't work, because the Deployment won't re-pull a tag that's already present.
+
+```bash
+minikube image build -t eks-status-page:dev2 .
+kubectl -n eks-status set image deploy/eks-status-page page=eks-status-page:dev2
+```
+
+Restart the port-forward afterwards; it stays attached to the old pod.
+
+**4. Walk through each state.** These are the timings seen on minikube with the default 60 s interval, the 30 s page cache and the detector's rules. `curl -s localhost:8080/api/status` gives the same data as JSON.
+
+| Scenario | Command | Expected on the page |
+|---|---|---|
+| All healthy | — | "All systems operational". argocd, coredns and kube-proxy up. |
+| A service goes down | `kubectl -n argocd scale deploy/argocd-redis --replicas=0` | argocd **down**, naming `deployment/argocd/argocd-redis`, after about 80 s. An ongoing **EKS service down** (Critical) incident after about 2.5 min. |
+| It recovers | `kubectl -n argocd scale deploy/argocd-redis --replicas=1` | argocd up, and the incident **resolved**, after about 2 min. Today's history block drops below 100%. |
+| The agent goes silent | `kubectl -n eks-status scale deploy/eks-health-agent --replicas=0` | "Some checks are not reporting", with every check **stale**, once the last data point is 180 s old. An ongoing **EKS health agent not reporting** (Major) incident after about 5 min. |
+| The agent is back | `kubectl -n eks-status scale deploy/eks-health-agent --replicas=3` | "All systems operational", with both incidents resolved, after about 1 min. |
+
+The history bars show only the hours minikube had data for. If the Mac slept for part of the day, a short outage weighs heavily in that day's figure; a 3-minute outage showed as 98.75%.
+
 ## Development
 
 ```bash

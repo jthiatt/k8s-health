@@ -92,12 +92,15 @@ def incidents(now_ms):
     out = []
     for i in api("/v2/incident", includeResolved="true", limit=100) or []:
         name = i.get("detectorName", "")
-        started = min((e.get("timestamp", 0) for e in i.get("events") or []), default=i.get("anomalyStateUpdateTimestamp", 0))
+        # anomalyStateUpdateTimestamp isn't reliably the resolve time (it can stay at the ANOMALOUS time),
+        # so take start/last-change from the incident's events.
+        times = [e["timestamp"] for e in i.get("events") or [] if e.get("timestamp")] or [i.get("anomalyStateUpdateTimestamp", 0)]
+        started = min(times)
         if DETECTOR_MATCH not in name.lower() or (not i.get("active") and now_ms - started > INCIDENT_DAYS * DAY):
             continue
         out.append({"detector": name, "rule": i.get("detectLabel", ""), "severity": i.get("severity", ""),
                     "active": bool(i.get("active")), "started_ms": started,
-                    "updated_ms": i.get("anomalyStateUpdateTimestamp", 0),
+                    "updated_ms": max(times),
                     "url": f"https://app.{REALM}.signalfx.com/#/detector/v2/{i.get('detectorId')}"})
     return sorted(out, key=lambda x: (not x["active"], -x["started_ms"]))
 

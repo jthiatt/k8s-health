@@ -32,6 +32,16 @@ hourly = {"a": [[today - DAY, 1], [today - DAY + 3_600_000, 0.5], [today, 1]],  
 h = history(mts, hourly, now, days=3)[("c1", "coredns")]
 assert h == [None, 0.75, 0.0], h
 
+# incidents: start = first event, resolved = last event (anomalyStateUpdateTimestamp can lag, as seen in Splunk)
+status_page.api = lambda path, **_: [
+    {"detectorName": "EKS core services", "detectLabel": "EKS service down", "severity": "Critical", "active": False,
+     "detectorId": "D1", "anomalyState": "OK", "anomalyStateUpdateTimestamp": now - 180_000,
+     "events": [{"anomalyState": "OK", "timestamp": now - 60_000}, {"anomalyState": "ANOMALOUS", "timestamp": now - 180_000}]},
+    {"detectorName": "book-tracker SLO", "detectLabel": "x", "active": True, "events": [{"timestamp": now}]}]
+status_page.DETECTOR_MATCH = "eks"
+(inc,) = status_page.incidents(now)
+assert inc["started_ms"] == now - 180_000 and inc["updated_ms"] == now - 60_000 and not inc["active"], inc
+
 # page renders (Flask test client, Splunk stubbed)
 for svc in s.values():
     svc.update(history=[None, 0.995, 1.0], uptime=0.9975)

@@ -9,4 +9,5 @@ COPY static static
 USER 65534
 EXPOSE 8080
 # One worker: the Splunk response cache is per process. Threads handle concurrent viewers.
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--worker-tmp-dir", "/dev/shm", "--access-logfile", "-", "status_page:app"]
+# No control socket: it would be created under $HOME, which is read-only (and /nonexistent) here.
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--worker-tmp-dir", "/dev/shm", "--no-control-socket", "--access-logfile", "-", "status_page:app"]
