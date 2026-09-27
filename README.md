@@ -13,7 +13,7 @@ The agent ([eks-health-agent](https://github.com/jthiatt/eks-health-agent)) and 
 | Metric `eks.health.up`, gauge, 1 = up / 0 = down | One datapoint per check per interval | The only metric it reads |
 | Dimensions `cluster`, `service`, `check` | `CLUSTER_NAME`, the service keys in `checks.json`, the check label | Groups the page by cluster, then service; lists failing checks by `check` |
 | Check interval | `INTERVAL_SECONDS` (default 60) | `INTERVAL_SECONDS` must be the same, or healthy checks show as stale |
-| Detector names contain "EKS" | `detector.tf` in the agent repo | `DETECTOR_MATCH=eks` filters which incidents are shown |
+| Detector names contain "EKS" | `splunk/detector.tf` in the agent repo | `DETECTOR_MATCH=eks` filters which incidents are shown |
 
 The Splunk OTel Collector also adds its own host dimensions. The status page ignores those and merges series by `cluster`/`service`/`check`.
 
@@ -21,7 +21,7 @@ The Splunk OTel Collector also adds its own host dimensions. The status page ign
 
 ## 1. Prerequisites
 
-- The agent deployed to your clusters and the detector applied (see the [eks-health-agent README](https://github.com/jthiatt/eks-health-agent)). Without them the page says "No data from any cluster agent".
+- The agent deployed to your clusters and its detector applied (see the [eks-health-agent README](https://github.com/jthiatt/eks-health-agent)). Without them the page says "No data from any cluster agent".
 - Docker and a container registry the cluster can pull from, such as ECR.
 - `kubectl` 1.21+ if you run the page in a cluster.
 
