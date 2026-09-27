@@ -1,0 +1,88 @@
+{
+  "coredns": [
+    {"kind": "deployment", "namespace": "kube-system", "name": "coredns"},
+    {"dns": "kubernetes.default.svc.cluster.local."},
+    {"dns": "sts.amazonaws.com."}
+  ],
+  "cilium": [
+    {"kind": "daemonset", "namespace": "kube-system", "name": "cilium"},
+    {"kind": "deployment", "namespace": "kube-system", "name": "cilium-operator"},
+    {
+      "metrics": {"namespace": "kube-system", "selector": "k8s-app=cilium", "port": 9962},
+      "forward": ["cilium_drop_count_total", "cilium_endpoint_state", "cilium_bpf_map_pressure",
+                  "cilium_node_health_connectivity_status"],
+      "max": {"cilium_bpf_map_pressure": 0.9}
+    },
+    {
+      "metrics": {"namespace": "kube-system", "selector": "io.cilium/app=operator", "port": 9963},
+      "forward": ["cilium_operator_ipam_ips"]
+    }
+  ],
+  "traefik": [
+    {"kind": "deployment", "namespace": "traefik", "name": "traefik"},
+    {
+      "metrics": {"namespace": "traefik", "selector": "app.kubernetes.io/name=traefik", "port": 9100},
+      "forward": ["traefik_entrypoint_requests_total", "traefik_open_connections", "traefik_config_reloads_total"]
+    }
+  ],
+  "external-secrets": [
+    {"kind": "deployment", "namespace": "external-secrets", "name": "external-secrets"},
+    {"kind": "deployment", "namespace": "external-secrets", "name": "external-secrets-webhook"},
+    {"kind": "deployment", "namespace": "external-secrets", "name": "external-secrets-cert-controller"},
+    {
+      "metrics": {"namespace": "external-secrets", "selector": "app.kubernetes.io/name=external-secrets", "port": 8080},
+      "forward": ["externalsecret_status_condition{condition=\"Ready\",status=\"False\"}",
+                  "clustersecretstore_status_condition{condition=\"Ready\",status=\"False\"}",
+                  "externalsecret_sync_calls_error", "externalsecret_sync_calls_total"],
+      "max": {"clustersecretstore_status_condition{condition=\"Ready\",status=\"False\"}": 0}
+    }
+  ],
+  "external-dns": [
+    {"kind": "deployment", "namespace": "external-dns", "name": "external-dns"},
+    {
+      "metrics": {"namespace": "external-dns", "selector": "app.kubernetes.io/name=external-dns", "port": 7979},
+      "forward": ["external_dns_source_errors_total", "external_dns_registry_errors_total",
+                  "external_dns_source_endpoints_total", "external_dns_registry_endpoints_total"],
+      "max_age": {"external_dns_controller_last_sync_timestamp_seconds": 600}
+    }
+  ],
+  "karpenter": [
+    {"kind": "deployment", "namespace": "kube-system", "name": "karpenter"},
+    {
+      "metrics": {"namespace": "kube-system", "selector": "app.kubernetes.io/name=karpenter", "port": 8080},
+      "forward": ["karpenter_nodepools_usage", "karpenter_nodepools_limit", "karpenter_cloudprovider_errors_total",
+                  "karpenter_nodeclaims_created_total", "karpenter_nodeclaims_disrupted_total",
+                  "karpenter_interruption_received_messages_total"]
+    }
+  ],
+  "fluxcd": [
+    {"kind": "deployment", "namespace": "flux-system", "name": "source-controller"},
+    {"kind": "deployment", "namespace": "flux-system", "name": "kustomize-controller"},
+    {"kind": "deployment", "namespace": "flux-system", "name": "helm-controller"},
+    {"kind": "deployment", "namespace": "flux-system", "name": "notification-controller"},
+    {
+      "metrics": {
+        "namespace": "flux-system",
+        "selector": "app in (source-controller,kustomize-controller,helm-controller,notification-controller)",
+        "port": 8080
+      },
+      "forward": ["controller_runtime_reconcile_errors_total", "controller_runtime_reconcile_total", "workqueue_depth"],
+      "max": {"workqueue_depth": 100}
+    }
+  ],
+  "argocd": [
+    {"kind": "deployment", "namespace": "argocd", "name": "argocd-server"},
+    {"kind": "deployment", "namespace": "argocd", "name": "argocd-repo-server"},
+    {"kind": "deployment", "namespace": "argocd", "name": "argocd-redis"},
+    {"kind": "statefulset", "namespace": "argocd", "name": "argocd-application-controller"},
+    {
+      "metrics": {"namespace": "argocd", "selector": "app.kubernetes.io/name=argocd-application-controller", "port": 8082},
+      "forward": ["argocd_app_info", "argocd_app_sync_total", "workqueue_depth"],
+      "max": {"workqueue_depth": 100}
+    },
+    {
+      "metrics": {"namespace": "argocd", "selector": "app.kubernetes.io/name=argocd-repo-server", "port": 8084},
+      "forward": ["argocd_git_request_total"]
+    }
+  ]
+}
