@@ -33,12 +33,45 @@ subjects:
     name: eks-health-agent
     namespace: eks-status
 ---
+# Leader election: the replicas share one Lease in their own namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eks-health-agent-leader-election
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eks-health-agent-leader-election
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eks-health-agent-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: eks-health-agent
+    namespace: eks-status
+---
+# Voluntary disruptions (node drains, upgrades) take at most one replica at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: eks-health-agent
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels: {app: eks-health-agent}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: eks-health-agent
 spec:
-  replicas: 1
+  replicas: 3  # one leader collects, two stand by (Lease "eks-health-agent")
   selector:
     matchLabels: {app: eks-health-agent}
   template:
@@ -47,6 +80,22 @@ spec:
     spec:
       serviceAccountName: eks-health-agent
       securityContext: {runAsNonRoot: true, runAsUser: 65534}
+      affinity:
+        podAntiAffinity:
+          # Preferred, not required: spread one per node where possible, but still run all replicas on
+          # clusters with fewer nodes than replicas. Make it required if you'd rather leave extras Pending.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: eks-health-agent}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: eks-health-agent}
       containers:
         - name: agent
           image: python:3.12-slim
@@ -56,6 +105,21 @@ spec:
             - {name: INTERVAL_SECONDS, value: "60"}   # status page's INTERVAL_SECONDS must match
             - name: SPLUNK_OTEL_AGENT  # node IP; the Splunk OTel Collector agent serves OTLP/HTTP on :4318 there
               valueFrom: {fieldRef: {fieldPath: status.hostIP}}
+            - name: POD_NAME  # leader election identity
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          ports:
+            - {name: health, containerPort: 8080}
+          # Ready = the API server answers (a replica that can't reach it can neither lead nor check).
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 5
+            failureThreshold: 2
+          # Live = the election loop is running and no check cycle has hung for 3 intervals.
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
           volumeMounts: [{name: app, mountPath: /app}]
           securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false}
           resources:

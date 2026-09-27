@@ -1,7 +1,10 @@
+import copy
 import threading
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from agent import matches, otlp, parse_prom, ready, scrape
+import agent
+from agent import LEASE_SECONDS, Elector, matches, otlp, parse_prom, ready, scrape
 
 PROM = """# HELP workqueue_depth Current depth
 # TYPE workqueue_depth gauge
@@ -82,4 +85,63 @@ assert [p["asDouble"] for p in up] == [1.0, 0.0] and up[0]["timeUnixNano"] == "1
 assert {"key": "check", "value": {"stringValue": "dns/x."}} in up[0]["attributes"]
 counter = metrics["coredns_dns_requests_total"]["sum"]
 assert counter["isMonotonic"] and counter["aggregationTemporality"] == 2 and counter["dataPoints"][0]["asDouble"] == 42.0
+# Leader election against a fake API server that enforces resourceVersion compare-and-swap like the real one
+class FakeAPI:
+    def __init__(self):
+        self.lease, self.rv, self.before_put = None, 0, None
+
+    def __call__(self, path, method="GET", body=None):
+        if method == "GET":
+            if self.lease is None:
+                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+            return copy.deepcopy(self.lease)
+        if self.before_put:
+            hook, self.before_put = self.before_put, None
+            hook()
+        if (method == "POST" and self.lease) or (method == "PUT" and body["metadata"]["resourceVersion"] != self.lease["metadata"]["resourceVersion"]):
+            raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
+        self.rv += 1
+        self.lease = {**copy.deepcopy(body), "metadata": {**body["metadata"], "resourceVersion": str(self.rv)}}
+        return copy.deepcopy(self.lease)
+
+
+api = agent.k8s = FakeAPI()
+a, b, c = Elector("ns", "a"), Elector("ns", "b"), Elector("ns", "c")
+t = 1_000_000.0
+a.tick(t)  # no lease yet: a creates it
+assert a.is_leader(t) and api.lease["spec"]["holderIdentity"] == "a"
+b.tick(t + 1)
+assert not b.is_leader(t + 1)  # a's lease is fresh: b stands by
+a.tick(t + 10)
+assert a.is_leader(t + 15) and api.lease["spec"]["holderIdentity"] == "a"
+
+# a's node breaks: it stops renewing. It must stop acting before anyone else can take over.
+assert not a.is_leader(t + 10 + LEASE_SECONDS - 5)
+b.tick(t + 10 + LEASE_SECONDS - 5)
+assert not b.is_leader(t + 10 + LEASE_SECONDS - 5)  # lease not expired yet
+t2 = t + 10 + LEASE_SECONDS + 1
+b.tick(t2)  # expired: b takes over
+assert b.is_leader(t2) and api.lease["spec"]["holderIdentity"] == "b" and api.lease["spec"]["leaseTransitions"] == 1
+
+# Takeover race: c and a both see an expired lease; a writes first, so c's write conflicts and c doesn't lead.
+t3 = t2 + LEASE_SECONDS + 1
+api.before_put = lambda: a.tick(t3)
+c.tick(t3)
+assert a.is_leader(t3) and not c.is_leader(t3) and api.lease["spec"]["holderIdentity"] == "a"
+
+# Stepping down (e.g. can't reach this node's collector): lease freed, a holds off, b takes over at once.
+a.release(hold_off=2 * LEASE_SECONDS, now=t3)
+assert not a.is_leader(t3) and api.lease["spec"]["holderIdentity"] is None
+a.tick(t3 + 1)
+assert not a.is_leader(t3 + 1)  # holding off
+b.tick(t3 + 1)
+assert b.is_leader(t3 + 1) and api.lease["spec"]["holderIdentity"] == "b"
+b.release(now=t3 + 2)  # b shuts down; a's hold-off has not expired, c's never started
+a.tick(t3 + 3)
+assert not a.is_leader(t3 + 3)
+c.tick(t3 + 3)
+assert c.is_leader(t3 + 3)
+c.release(now=t3 + 2 * LEASE_SECONDS + 2)
+a.tick(t3 + 2 * LEASE_SECONDS + 3)  # a's hold-off is over
+assert a.is_leader(t3 + 2 * LEASE_SECONDS + 3)
 print("ok")

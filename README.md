@@ -16,6 +16,8 @@ The dashboard that reads these metrics is a separate repo: [eks-status-page](htt
 
 The agent is a single Python script that uses only the standard library. It runs on the stock `python:3.12-slim` image and loads the script from a ConfigMap, so there's no image to build. It sends **OTLP/HTTP (JSON)** to the collector on its own node, the collector's standard input, so it works with a default chart install. It needs **no Splunk token**: the collector forwards the data with the ingest token it already has.
 
+It runs as **3 replicas, with one leader** chosen through a Kubernetes Lease, so a single bad node doesn't stop the checks. See [High availability](#high-availability).
+
 ## How the agent and status page connect
 
 The agent ([eks-health-agent](https://github.com/jthiatt/eks-health-agent)) and the status page ([eks-status-page](https://github.com/jthiatt/eks-status-page)) are separate repos with separate release cycles. They never talk to each other directly; everything goes through Splunk. **Changing any of the following in one repo means changing the other to match:**
@@ -95,10 +97,12 @@ If you use GitOps, point a Flux `Kustomization` or an Argo CD `Application` at t
 ### 2d. Verify
 
 ```bash
-kubectl -n eks-status logs deploy/eks-health-agent
+kubectl -n eks-status get pods -l app=eks-health-agent          # 3 pods, all READY 1/1
+kubectl -n eks-status get lease eks-health-agent                # HOLDER = the leader pod
+kubectl -n eks-status logs "$(kubectl -n eks-status get lease eks-health-agent -o jsonpath='{.spec.holderIdentity}')"
 ```
 
-A healthy agent logs nothing. Every failed check logs a JSON line with `service`, `check` and `error`. An `ingest failed` line means the agent couldn't reach the collector on its node. Within a minute or two, the metric `eks.health.up` should appear in Splunk's Metric Finder with `cluster`, `service` and `check` dimensions.
+Only the leader runs checks, so read the **leader's** logs. `kubectl logs deploy/eks-health-agent` picks an arbitrary pod, usually a standby with nothing to say. A healthy leader logs only `became leader`. Every failed check logs a JSON line with `service`, `check` and `error`. An `ingest failed` line means the leader couldn't reach the collector on its node; after 3 in a row it hands over to another replica. Within a minute or two, the metric `eks.health.up` should appear in Splunk's Metric Finder with `cluster`, `service` and `check` dimensions.
 
 The collector also adds its own dimensions (`host.name`, `k8s.node.name`, `k8s.cluster.name`, cloud attributes). So when the agent pod moves to another node, each check starts a new series in Splunk. The status page merges series by `cluster`/`service`/`check` and keeps the newest point, and the detector groups by `cluster` and `service`, so neither is affected. If you build your own charts, group by those dimensions too.
 
@@ -154,6 +158,32 @@ The detector has no notification recipients, so it only raises incidents, which 
 The page only lists incidents from detectors whose name contains `DETECTOR_MATCH` (default in the manifest: `eks`). Keep "EKS" in the names of any detectors you add.
 
 ---
+
+## High availability
+
+The Deployment runs **3 replicas**. They elect a leader with a Kubernetes **Lease** named `eks-health-agent` in the agent's namespace, the same mechanism client-go's `leaderelection` and kube-controller-manager use. Only the leader runs checks and sends data; the others stand by.
+
+- **Election:** every replica tries to acquire or renew the Lease every 10 seconds. Updates use the Lease's `resourceVersion`, so when two replicas race for an expired Lease, exactly one wins and the other gets `409 Conflict`.
+- **Leader's node dies or loses the API server:** the leader stops renewing. It stops collecting 20 seconds after its last successful renewal, and a standby takes over once the Lease expires (`LEASE_DURATION_SECONDS`, 30), so two leaders never overlap. On minikube a frozen leader was replaced after 23 seconds.
+- **Leader can't reach its node's collector:** after 3 failed sends in a row, it releases the Lease and holds off for 60 seconds, so a replica on another node, with a working collector, takes over. Failing *checks* never cause a handover; those are results, not node problems.
+- **Rollouts and deletes:** on SIGTERM the leader releases the Lease, so a standby takes over at its next attempt. On minikube that took under 1 second.
+- **Status page:** a handover costs at most one check interval, well within the page's 3-interval stale threshold. On minikube, Splunk showed no gap longer than the normal 60 seconds across both tests.
+
+**Probes** (port 8080):
+
+| Endpoint | Probe | 200 when | Why |
+|---|---|---|---|
+| `/readyz` | readiness | The Kubernetes API answered within the last 30 s | A replica that can't reach the API can neither lead nor run checks. |
+| `/healthz` | liveness | The election loop is running, and no check cycle has been stuck for 3 × `INTERVAL_SECONDS` | Restarts a hung process. It deliberately stays healthy when the API or collector is unreachable, because restarting on the same node wouldn't help; handing over leadership does. |
+
+Both return `{"ok": ..., "role": "leader" | "standby"}`.
+
+**Placement:**
+- **Pod anti-affinity:** prefers one replica per node (`kubernetes.io/hostname`). It's *preferred*, not required, so all 3 still run on clusters with fewer than 3 nodes (like minikube). Switch it to `requiredDuringSchedulingIgnoredDuringExecution` if you'd rather leave extra replicas Pending than share a node.
+- **Topology spread:** a `topologySpreadConstraints` rule spreads replicas across availability zones (`ScheduleAnyway`).
+- **PodDisruptionBudget:** `maxUnavailable: 1`, so node drains and upgrades take at most one replica at a time.
+
+**RBAC:** a namespaced Role, `eks-health-agent-leader-election`, allows `get`, `create` and `update` on Leases in the agent's namespace. The existing ClusterRole is unchanged.
 
 ## Configuring checks (`checks.json`)
 
@@ -218,13 +248,16 @@ These defaults are the upstream Helm chart values. **Check the namespaces, label
 | `SPLUNK_OTEL_AGENT` | node IP (Downward API `status.hostIP`) | The host of the node-local collector. The agent sends OTLP/HTTP JSON to `http://<SPLUNK_OTEL_AGENT>:4318/v1/metrics`. |
 | `OTLP_ENDPOINT` | — | Overrides the base URL (the agent appends `/v1/metrics`), for example a collector gateway Service: `http://splunk-otel-collector.<ns>:4318`. |
 | `CHECKS_FILE` | `/app/checks.json` | Location of the checks file. |
+| `POD_NAME` | pod hostname (the manifest sets it from `metadata.name`) | This replica's identity in the Lease. |
+| `LEASE_DURATION_SECONDS` | `30` | How long a Lease stays valid without renewal, so roughly how long a dead leader takes to be replaced. Must be more than 10 (the renew period); the leader stops acting 10 s before it expires. |
+| `HEALTH_PORT` | `8080` | Port for `/healthz` and `/readyz`. |
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
 | `collector rejected datapoints` in the agent logs | The collector accepted the request but dropped some points (the log line includes its reason). Check the collector's own logs. |
-| A whole cluster shows **stale** | The agent pod isn't running, or it can't reach the collector. Check `kubectl -n eks-status logs deploy/eks-health-agent` for `ingest failed`, then run the probe in [2a](#2a-check-the-collector-receiver). Also check that the collector pod on the agent's node is healthy, because the agent only sends to its own node's collector. |
+| A whole cluster shows **stale** | The agent pod isn't running, or it can't reach the collector. Check the leader's logs for `ingest failed` (see [2d](#2d-verify)), then run the probe in [2a](#2a-check-the-collector-receiver). Also check that the collector pod on the agent's node is healthy, because the agent only sends to its own node's collector. |
 | A cluster is missing from the page | It has never reported. Check `CLUSTER_NAME`, and check that the collector on the agent's node is running and exporting (its own logs). |
 | `metrics/...` check is down with `no running pods match selector` | The label selector or namespace doesn't match your install. Compare with `kubectl get pods -n <ns> --show-labels`. |
 | `metrics/...` check is down with a timeout or connection refused | Wrong port, metrics disabled in Helm, a NetworkPolicy, or (Cilium) the node security group. |
@@ -233,6 +266,8 @@ These defaults are the upstream Helm chart values. **Check the namespaces, label
 | A removed check still shows on the status page | Expected for a while. It shows its last state, then stale after `STALE_AFTER_SECONDS`. The page drops it about 15 minutes after its last point, once it has no data in the lookback window while the rest of the cluster keeps reporting. In Splunk charts it simply stops reporting. |
 | Pod stuck in `ContainerCreating`: `configmap "eks-health-agent" not found` | It was applied with `kubectl apply -f` instead of `-k`, so the generated ConfigMap was never created. Re-apply with `kubectl apply -k`. See [2c](#2c-apply). |
 | `git fetch ... exit status 128` when applying the overlay | The overlay uses an `https://` URL for this private repo. Use `ssh://git@github.com/jthiatt/eks-health-agent.git?ref=...`. See [2b](#2b-set-the-cluster-name). |
+| No pod holds the Lease, or the holder keeps changing | Check the logs of every replica for `leader election failed`. `Forbidden` on `leases` means the Role or RoleBinding wasn't applied. Frequent changes with `stepping down: cannot reach this node's collector` mean several nodes' collectors are unhealthy. |
+| Pods not Ready | `/readyz` fails when the pod can't reach the Kubernetes API. Check the node's networking. Check the probe response with `kubectl -n eks-status exec <pod> -- python -c "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8080/readyz').read())"`. |
 | `Forbidden` on pods or deployments in the agent logs | The ClusterRole wasn't applied. Re-run `kubectl apply -k`. |
 
 ## Development
@@ -292,7 +327,7 @@ kubectl kustomize --load-restrictor LoadRestrictionsNone test/minikube | kubectl
 ```
 
 **3. Check:**
-- **Agent logs:** `kubectl -n eks-status logs deploy/eks-health-agent` should show no warnings once Argo CD is ready. Every failing check logs one line per cycle.
+- **Agent:** 3 pods Ready, exactly one holding the Lease. The **leader's** logs (`kubectl -n eks-status logs "$(kubectl -n eks-status get lease eks-health-agent -o jsonpath='{.spec.holderIdentity}')"`) should show only `became leader` once Argo CD is ready. Every failing check logs one line per cycle.
 - **Splunk:** within a minute or two, `eks.health.up` with `cluster:minikube` should show 11 series (4 coredns, 1 kube-proxy, 6 argocd), all at 1. `coredns_dns_requests_total` should arrive as a cumulative counter, and Argo CD's `workqueue_depth` as a gauge. With the guestbook app, `argocd_app_info` should also appear, with `name=guestbook`, `health_status=Healthy` and `sync_status=Synced`. So should the counters `argocd_app_sync_total` (`phase=Succeeded`) and `argocd_git_request_total` (`fetch` and `ls-remote`).
 
 **Testing an unhealthy Argo CD app.** Point the guestbook at an image tag that doesn't exist:
@@ -313,5 +348,20 @@ Restore it:
 kubectl -n argocd patch app guestbook --type merge -p '{"spec":{"source":{"kustomize":null}}}'
 ```
 - **Status page:** run it locally against the same org. It should show a `minikube` cluster with argocd, coredns and kube-proxy up. The 30-day history bars stay grey for about the first hour, until Splunk has hourly rollups.
+
+**Testing failover.** These are the two scenarios verified on minikube:
+
+```bash
+# Graceful: delete the leader. It releases the Lease and a standby takes over within ~1-10 s.
+kubectl -n eks-status delete pod "$(kubectl -n eks-status get lease eks-health-agent -o jsonpath='{.spec.holderIdentity}')"
+
+# Frozen leader (like a hung node): stop its process from the node, so it can neither renew nor release.
+# A signal from inside the container won't work: PID 1 ignores SIGSTOP sent from its own PID namespace.
+L=$(kubectl -n eks-status get lease eks-health-agent -o jsonpath='{.spec.holderIdentity}')
+CID=$(kubectl -n eks-status get pod $L -o jsonpath='{.status.containerStatuses[0].containerID}' | sed 's|containerd://||')
+minikube ssh -- sudo kill -STOP "$(minikube ssh -- sudo crictl inspect --output go-template --template '{{.info.pid}}' $CID | tr -d '\r')"
+kubectl -n eks-status get lease eks-health-agent -w    # new HOLDER after ~20-30 s
+kubectl -n eks-status get pod $L -w                    # RESTARTS 1 after ~1 min (liveness), then back as standby
+```
 
 To iterate, edit `agent.py` or the checks and re-run step 2. The ConfigMap hash changes, so the pod restarts with the new code.

@@ -1,6 +1,9 @@
 """EKS core-service health agent: every INTERVAL_SECONDS runs the checks in checks.json and pushes
 one `eks.health.up` gauge (1/0) per check, dims: cluster, service, check, over OTLP/HTTP (JSON) to
-the node-local Splunk OTel Collector. `metrics` checks also forward selected Prometheus series."""
+the node-local Splunk OTel Collector. `metrics` checks also forward selected Prometheus series.
+
+Runs as several replicas; a Kubernetes Lease elects the one that collects. The others stand by and
+take over if the leader's node breaks (it stops renewing) or can't reach its collector (it steps down)."""
 import json
 import math
 import os
@@ -9,15 +12,23 @@ import signal
 import socket
 import ssl
 import sys
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 METRIC = "eks.health.up"
 PATHS = {"deployment": "deployments", "statefulset": "statefulsets", "daemonset": "daemonsets"}
 PROM_LINE = re.compile(r"^([a-zA-Z_:][\w:]*)(?:\{(.*)\})?\s+(\S+)")
 PROM_LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
+LEASE = "eks-health-agent"
+LEASE_SECONDS = int(os.environ.get("LEASE_DURATION_SECONDS", "30"))  # a dead leader is replaced after this
+RENEW_SECONDS = 10  # how often every replica tries to acquire/renew
+SEND_FAILURES_TO_STEP_DOWN = 3  # consecutive failed sends to this node's collector
 
 
 def ready(kind, obj):
@@ -33,11 +44,12 @@ def bracket(host):
     return f"[{host}]" if ":" in host else host  # IPv6
 
 
-def k8s_get(path):
+def k8s(path, method="GET", body=None):
     # Talk to the API by IP, not kubernetes.default.svc, so a CoreDNS outage doesn't fail every check.
     url = f"https://{bracket(os.environ['KUBERNETES_SERVICE_HOST'])}:{os.environ['KUBERNETES_SERVICE_PORT']}{path}"
     with open(f"{SA}/token") as f:  # re-read: projected tokens rotate
-        req = urllib.request.Request(url, headers={"Authorization": "Bearer " + f.read()})
+        req = urllib.request.Request(url, method=method, data=None if body is None else json.dumps(body).encode(),
+                                     headers={"Authorization": "Bearer " + f.read(), "Content-Type": "application/json"})
     with urllib.request.urlopen(req, context=ssl.create_default_context(cafile=f"{SA}/ca.crt"), timeout=5) as r:
         return json.load(r)
 
@@ -83,7 +95,7 @@ def metrics_targets(t):
     if "url" in t:
         return [(t["url"], {})]
     q = urllib.parse.urlencode({"labelSelector": t["selector"], "fieldSelector": "status.phase=Running"})
-    pods = [p for p in k8s_get(f"/api/v1/namespaces/{t['namespace']}/pods?{q}")["items"] if p["status"].get("podIP")]
+    pods = [p for p in k8s(f"/api/v1/namespaces/{t['namespace']}/pods?{q}")["items"] if p["status"].get("podIP")]
     if not pods:
         raise RuntimeError("no running pods match selector")
     return [(f"http://{bracket(p['status']['podIP'])}:{t['port']}{t.get('path', '/metrics')}", {"pod": p["metadata"]["name"]})
@@ -121,7 +133,7 @@ def run_check(c, out):
     if "dns" in c:
         socket.getaddrinfo(c["dns"], 443)
         return
-    obj = k8s_get(f"/apis/apps/v1/namespaces/{c['namespace']}/{PATHS[c['kind']]}/{c['name']}")
+    obj = k8s(f"/apis/apps/v1/namespaces/{c['namespace']}/{PATHS[c['kind']]}/{c['name']}")
     if not ready(c["kind"], obj):
         raise RuntimeError(f"not ready: {obj.get('status')}")
 
@@ -149,42 +161,205 @@ def otlp(points, ts_ns):
         {"scope": {"name": "eks-health-agent"}, "metrics": list(metrics.values())}]}]}
 
 
+def log(level, msg, **kw):
+    print(json.dumps({"level": level, "msg": msg, **kw}), flush=True)
+
+
+def micro(t):
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")  # k8s MicroTime
+
+
+def parse_micro(s):
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc).timestamp()
+
+
+class Elector:
+    """Leader election on a coordination.k8s.io Lease, like client-go's leaderelection. Updates use the
+    Lease's resourceVersion, so two replicas can't both win a takeover: the loser gets 409 Conflict."""
+
+    def __init__(self, namespace, identity):
+        self.collection = f"/apis/coordination.k8s.io/v1/namespaces/{namespace}/leases"
+        self.path = f"{self.collection}/{LEASE}"
+        self.identity = identity
+        self.renewed = 0.0  # when we last renewed as holder
+        self.api_ok = 0.0  # when the API server last answered us (readiness)
+        self.ticked = time.time()  # when the election loop last ran (liveness)
+        self.hold_off_until = 0.0  # after stepping down, don't try to re-acquire before this
+        self.lock = threading.RLock()
+
+    def is_leader(self, now=None):
+        # Stop acting one renew period before the lease can expire, so we never overlap a successor.
+        return (now or time.time()) - self.renewed < LEASE_SECONDS - RENEW_SECONDS
+
+    def tick(self, now=None):
+        now = now or time.time()
+        with self.lock:
+            self.ticked = time.time()
+            spec = {"holderIdentity": self.identity, "leaseDurationSeconds": LEASE_SECONDS, "renewTime": micro(now)}
+            try:
+                lease = k8s(self.path)
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    raise
+                self.api_ok = now
+                if now >= self.hold_off_until:
+                    k8s(self.collection, "POST", {"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
+                                                  "metadata": {"name": LEASE},
+                                                  "spec": {**spec, "acquireTime": micro(now), "leaseTransitions": 0}})
+                    self._won(now)
+                return
+            self.api_ok = now
+            cur = lease.get("spec", {})
+            mine = cur.get("holderIdentity") == self.identity
+            expired = (not cur.get("holderIdentity") or not cur.get("renewTime")
+                       or parse_micro(cur["renewTime"]) + cur.get("leaseDurationSeconds", LEASE_SECONDS) < now)
+            if not mine and (not expired or now < self.hold_off_until):
+                self._lost()
+                return
+            if not mine:
+                spec.update(acquireTime=micro(now), leaseTransitions=cur.get("leaseTransitions", 0) + 1)
+            lease["spec"] = {**cur, **spec}
+            try:
+                k8s(self.path, "PUT", lease)  # metadata.resourceVersion makes this compare-and-swap
+            except urllib.error.HTTPError as e:
+                if e.code == 409:  # someone else updated it first
+                    self._lost()
+                    return
+                raise
+            self._won(now)
+
+    def release(self, hold_off=0.0, now=None):
+        """Give up the lease now (shutdown, or this node can't send) so another replica takes over at its next tick."""
+        now = now or time.time()
+        with self.lock:
+            self.hold_off_until = now + hold_off
+            if not self.renewed:
+                return
+            self.renewed = 0.0
+            try:
+                lease = k8s(self.path)
+                if lease.get("spec", {}).get("holderIdentity") == self.identity:
+                    lease["spec"].update(holderIdentity=None, leaseDurationSeconds=1, renewTime=micro(now))
+                    k8s(self.path, "PUT", lease)
+                log("info", "released leadership", identity=self.identity, hold_off_seconds=hold_off)
+            except Exception as e:  # it will expire on its own
+                log("warn", "lease release failed", error=str(e))
+
+    def _won(self, now):
+        if not self.is_leader(now):
+            log("info", "became leader", identity=self.identity)
+        self.renewed = now
+
+    def _lost(self):
+        if self.renewed:
+            log("info", "lost leadership", identity=self.identity)
+        self.renewed = 0.0
+
+    def run(self):
+        while True:
+            try:
+                self.tick()
+            except Exception as e:
+                log("warn", "leader election failed", error=str(e))
+            time.sleep(RENEW_SECONDS)
+
+
+def collect(checks, cluster):
+    points = []
+    for service, items in checks.items():
+        for c in items:
+            extra = []
+            try:
+                run_check(c, extra)
+                up = 1
+            except Exception as e:
+                up = 0
+                print(json.dumps({"level": "warn", "service": service, "check": label_of(c), "error": str(e)}), flush=True)
+            base = {"cluster": cluster, "service": service}
+            points.append((METRIC, up, {**base, "check": label_of(c)}, "gauge"))
+            points += [(name, value, {**dims, **base}, typ) for name, value, dims, typ in extra]
+    return points
+
+
+def send(endpoint, points, start):
+    """True if the collector took the batch."""
+    try:
+        req = urllib.request.Request(f"{endpoint}/v1/metrics", data=json.dumps(otlp(points, int(start * 1e9))).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            rejected = json.loads(r.read() or b"{}").get("partialSuccess", {})
+        if rejected.get("rejectedDataPoints"):
+            log("error", "collector rejected datapoints", **rejected)
+        return True
+    except Exception as e:
+        log("error", "ingest failed", error=str(e))
+        return False
+
+
+def health_server(elector, state, interval, port):
+    """/readyz: the API server answers us (a replica that can't reach it can't lead or check anything).
+    /healthz: the election loop is running and no check cycle is stuck; failing it gets the pod restarted."""
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            now = time.time()
+            role = "leader" if elector.is_leader(now) else "standby"
+            if self.path == "/readyz":
+                ok = now - elector.api_ok < 3 * RENEW_SECONDS
+            elif self.path == "/healthz":
+                stuck = state["cycle_since"] and now - state["cycle_since"] > 3 * interval
+                ok = now - elector.ticked < 3 * RENEW_SECONDS + 20 and not stuck  # +20: a tick's own API timeouts
+            else:
+                ok = None
+            body = json.dumps({"ok": ok, "role": role}).encode()
+            self.send_response(404 if ok is None else 200 if ok else 503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # no access log for probes
+            pass
+
+    threading.Thread(target=ThreadingHTTPServer(("", port), Handler).serve_forever, daemon=True).start()
+
+
 def main():
-    # As PID 1 in the container, Python ignores SIGTERM unless it has a handler, so pod shutdown would wait
-    # out the whole grace period. Exit at once instead; a lost in-flight cycle is harmless.
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     cluster = os.environ["CLUSTER_NAME"]
     interval = int(os.environ.get("INTERVAL_SECONDS", "60"))
     # Default: OTLP/HTTP on the Splunk OTel Collector agent on this node (hostNetwork, :4318); it adds its own token.
     endpoint = os.environ.get("OTLP_ENDPOINT") or f"http://{bracket(os.environ['SPLUNK_OTEL_AGENT'])}:4318"
     with open(os.environ.get("CHECKS_FILE", "/app/checks.json")) as f:
         checks = json.load(f)
+    with open(f"{SA}/namespace") as f:
+        namespace = f.read().strip()
 
+    elector = Elector(namespace, os.environ.get("POD_NAME") or socket.gethostname())
+    state = {"cycle_since": 0.0}
+
+    def shutdown(*_):
+        # As PID 1, Python ignores SIGTERM without a handler. Hand the lease over so a standby takes over
+        # within one renew period instead of waiting for it to expire, then exit.
+        elector.release()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, shutdown)
+    health_server(elector, state, interval, int(os.environ.get("HEALTH_PORT", "8080")))
+    threading.Thread(target=elector.run, daemon=True).start()
+
+    next_run, failures = 0.0, 0
     while True:
-        start = time.time()
-        points = []
-        for service, items in checks.items():
-            for c in items:
-                extra = []
-                try:
-                    run_check(c, extra)
-                    up = 1
-                except Exception as e:
-                    up = 0
-                    print(json.dumps({"level": "warn", "service": service, "check": label_of(c), "error": str(e)}), flush=True)
-                base = {"cluster": cluster, "service": service}
-                points.append((METRIC, up, {**base, "check": label_of(c)}, "gauge"))
-                points += [(name, value, {**dims, **base}, typ) for name, value, dims, typ in extra]
-        try:
-            req = urllib.request.Request(f"{endpoint}/v1/metrics", data=json.dumps(otlp(points, int(start * 1e9))).encode(),
-                                         headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                rejected = json.loads(r.read() or b"{}").get("partialSuccess", {})
-            if rejected.get("rejectedDataPoints"):
-                print(json.dumps({"level": "error", "msg": "collector rejected datapoints", **rejected}), flush=True)
-        except Exception as e:
-            print(json.dumps({"level": "error", "msg": "ingest failed", "error": str(e)}), flush=True)
-        time.sleep(max(0, interval - (time.time() - start)))
+        if elector.is_leader() and time.time() >= next_run:
+            start = time.time()
+            next_run = start + interval
+            state["cycle_since"] = start
+            ok = send(endpoint, collect(checks, cluster), start)
+            state["cycle_since"] = 0.0
+            failures = 0 if ok else failures + 1
+            if failures >= SEND_FAILURES_TO_STEP_DOWN:
+                # This node's collector is unreachable: let a replica on another node take over.
+                log("warn", "stepping down: cannot reach this node's collector", failures=failures)
+                elector.release(hold_off=2 * LEASE_SECONDS)
+                failures = 0
+        time.sleep(1)
 
 
 if __name__ == "__main__":
