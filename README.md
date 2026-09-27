@@ -68,7 +68,7 @@ Each cluster must report a unique `CLUSTER_NAME`, because that's how the status 
 
 ```yaml
 resources:
-  - https://github.com/jthiatt/eks-health-agent?ref=v0.1.0   # or a local path to a checkout
+  - ssh://git@github.com/jthiatt/eks-health-agent.git?ref=v0.1.0   # or a local path to a checkout
 patches:
   - target: {kind: Deployment, name: eks-health-agent}
     patch: |
@@ -77,6 +77,8 @@ patches:
         value: prod-use1
 ```
 
+The repo is private, so use the `ssh://` form shown. kustomize fetches remote bases with `git`, and an `https://github.com/...` URL fails with `git fetch ... exit status 128` because it has no credentials. Whatever renders the overlay (you, CI, or Flux/Argo CD) needs an SSH key with read access to this repo.
+
 To use different checks in one cluster, add a `configMapGenerator` to the overlay with `name: eks-health-agent`, `behavior: replace` and that cluster's own `checks.json`.
 
 ### 2c. Apply
@@ -84,6 +86,8 @@ To use different checks in one cluster, add a `configMapGenerator` to the overla
 ```bash
 kubectl apply -k clusters/prod-use1
 ```
+
+**Always use `-k` (kustomize), never `kubectl apply -f agent.yaml`.** There's no ConfigMap file in this repo: `kustomization.yaml` generates the `eks-health-agent` ConfigMap from `agent.py` and `checks.json`, and adds a content hash to its name. `-f agent.yaml` creates the Deployment without that ConfigMap, and the pod is stuck in `ContainerCreating` with `configmap "eks-health-agent" not found`. To see exactly what gets applied, run `kubectl kustomize clusters/prod-use1`.
 
 If you use GitOps, point a Flux `Kustomization` or an Argo CD `Application` at the overlay directory. The agent monitors Flux and Argo CD, so it still reports correctly when those tools are the ones deploying it.
 
@@ -212,6 +216,8 @@ These defaults are the upstream Helm chart values. **Check the namespaces, label
 | `... missing` in the error | A `min` or `max_age` series doesn't exist. The metric name changed in your version, or the component isn't exporting it. |
 | A forwarded metric never appears in Splunk | The metric name doesn't exist in your version. Forwarding a nonexistent name does nothing, so it doesn't fail the check. Compare against `curl <pod-ip>:<port>/metrics`. |
 | A removed check shows as stale | Splunk keeps its series for a while. It stops showing once the series expires, or you can delete it in Splunk. |
+| Pod stuck in `ContainerCreating`: `configmap "eks-health-agent" not found` | It was applied with `kubectl apply -f` instead of `-k`, so the generated ConfigMap was never created. Re-apply with `kubectl apply -k`. See [2c](#2c-apply). |
+| `git fetch ... exit status 128` when applying the overlay | The overlay uses an `https://` URL for this private repo. Use `ssh://git@github.com/jthiatt/eks-health-agent.git?ref=...`. See [2b](#2b-set-the-cluster-name). |
 | `Forbidden` on pods or deployments in the agent logs | The ClusterRole wasn't applied. Re-run `kubectl apply -k`. |
 
 ## Development
