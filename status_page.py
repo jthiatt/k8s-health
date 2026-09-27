@@ -13,6 +13,7 @@ from flask import Flask, jsonify, render_template
 
 REALM = os.environ.get("SPLUNK_REALM", "us1")
 API = f"https://api.{REALM}.signalfx.com"
+APP = f"https://app.{REALM}.observability.splunkcloud.com"
 TOKEN = os.environ.get("SPLUNK_API_TOKEN", "")
 INTERVAL = int(os.environ.get("INTERVAL_SECONDS", "60"))
 STALE_AFTER = int(os.environ.get("STALE_AFTER_SECONDS", str(3 * INTERVAL)))
@@ -88,6 +89,11 @@ def history(mts, hourly, now_ms, days=HISTORY_DAYS):
     return {k: [worst.get(d) for d in day_starts(now_ms, days)] for k, worst in per.items()}
 
 
+def detector_url(detector_id):
+    # Verified in the Splunk UI. Not the `url` the Terraform provider reports (#/detector/<id>), which is "not found".
+    return f"{APP}/#/detector/v2/{detector_id}/edit?detectorSignalFlowEditor=1"
+
+
 def incidents(now_ms):
     out = []
     for i in api("/v2/incident", includeResolved="true", limit=100) or []:
@@ -101,7 +107,7 @@ def incidents(now_ms):
         out.append({"detector": name, "rule": i.get("detectLabel", ""), "severity": i.get("severity", ""),
                     "active": bool(i.get("active")), "started_ms": started,
                     "updated_ms": max(times),
-                    "url": f"https://app.{REALM}.signalfx.com/#/detector/v2/{i.get('detectorId')}"})
+                    "url": detector_url(i.get("detectorId"))})
     return sorted(out, key=lambda x: (not x["active"], -x["started_ms"]))
 
 

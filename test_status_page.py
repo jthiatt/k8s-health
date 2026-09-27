@@ -41,6 +41,7 @@ status_page.api = lambda path, **_: [
 status_page.DETECTOR_MATCH = "eks"
 (inc,) = status_page.incidents(now)
 assert inc["started_ms"] == now - 180_000 and inc["updated_ms"] == now - 60_000 and not inc["active"], inc
+assert inc["url"] == "https://app.us1.observability.splunkcloud.com/#/detector/v2/D1/edit?detectorSignalFlowEditor=1", inc["url"]
 
 # page renders (Flask test client, Splunk stubbed)
 for svc in s.values():
