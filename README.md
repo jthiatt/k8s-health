@@ -230,7 +230,7 @@ These defaults are the upstream Helm chart values. **Check the namespaces, label
 | `metrics/...` check is down with a timeout or connection refused | Wrong port, metrics disabled in Helm, a NetworkPolicy, or (Cilium) the node security group. |
 | `... missing` in the error | A `min` or `max_age` series doesn't exist. The metric name changed in your version, or the component isn't exporting it. |
 | A forwarded metric never appears in Splunk | The metric name doesn't exist in your version. Forwarding a nonexistent name does nothing, so it doesn't fail the check. Compare against `curl <pod-ip>:<port>/metrics`. |
-| A removed check shows as stale | Splunk keeps its series for a while. It stops showing once the series expires, or you can delete it in Splunk. |
+| A removed check still shows on the status page | Expected for a while. It shows its last state, then stale after `STALE_AFTER_SECONDS`. The page drops it about 15 minutes after its last point, once it has no data in the lookback window while the rest of the cluster keeps reporting. In Splunk charts it simply stops reporting. |
 | Pod stuck in `ContainerCreating`: `configmap "eks-health-agent" not found` | It was applied with `kubectl apply -f` instead of `-k`, so the generated ConfigMap was never created. Re-apply with `kubectl apply -k`. See [2c](#2c-apply). |
 | `git fetch ... exit status 128` when applying the overlay | The overlay uses an `https://` URL for this private repo. Use `ssh://git@github.com/jthiatt/eks-health-agent.git?ref=...`. See [2b](#2b-set-the-cluster-name). |
 | `Forbidden` on pods or deployments in the agent logs | The ClusterRole wasn't applied. Re-run `kubectl apply -k`. |
@@ -248,7 +248,9 @@ There's no build step and no dependencies. Edit `agent.py` or `checks.json` and 
 `test/minikube/` runs the agent on a local minikube with the same collector chart used on EKS. minikube has none of the EKS add-ons, so it uses its own checks (`test/minikube/checks.json`):
 - **coredns:** the Deployment, internal and external DNS lookups, and a metrics check against CoreDNS's own Prometheus port (9153). This exercises pod discovery, scraping, forwarding and thresholds.
 - **kube-proxy:** a DaemonSet check.
-- **missing-example:** a Deployment that doesn't exist, so the down path is exercised too.
+- **argocd:** the same Argo CD checks as `checks.json` (workloads plus metrics scrapes on :8082 and :8084, through Argo CD's own NetworkPolicies). Install Argo CD first (step 1b).
+
+To exercise the down path, scale something down, for example `kubectl -n argocd scale deploy/argocd-redis --replicas=0`. Then scale it back up.
 
 **1. Install the collector** (once). Use a dedicated INGEST-only token, stored as a Secret so it never lands in git:
 
@@ -267,6 +269,13 @@ Use **Helm 3.8 or newer**. Older Helm (for example the 3.7 bundled with Rancher 
 - **Kubelet TLS:** it skips TLS verification to the kubelet, because minikube's kubelet certificate has no IP address in it.
 - **Control-plane metrics:** it turns off controller-manager and scheduler metrics, because minikube binds them to localhost. On EKS the control plane isn't visible anyway.
 
+**1b. Install Argo CD** (once), the upstream manifests pinned to a release:
+
+```bash
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml
+```
+
 **2. Deploy the agent** from your working copy. This overlay sits inside the base's directory, so it references the base files directly and needs the relaxed load restrictor:
 
 ```bash
@@ -274,8 +283,8 @@ kubectl kustomize --load-restrictor LoadRestrictionsNone test/minikube | kubectl
 ```
 
 **3. Check:**
-- **Agent logs:** `kubectl -n eks-status logs deploy/eks-health-agent` should show exactly one warning, for `missing-example` (`HTTP Error 404`).
-- **Splunk:** within a minute or two, `eks.health.up` with `cluster:minikube` should show 6 series: five at 1 and one at 0. `coredns_dns_requests_total` should arrive as a cumulative counter.
-- **Status page:** run it locally against the same org. It should show a `minikube` cluster with coredns and kube-proxy up and missing-example down. The 30-day history bars stay grey for about the first hour, until Splunk has hourly rollups.
+- **Agent logs:** `kubectl -n eks-status logs deploy/eks-health-agent` should show no warnings once Argo CD is ready. Every failing check logs one line per cycle.
+- **Splunk:** within a minute or two, `eks.health.up` with `cluster:minikube` should show 11 series (4 coredns, 1 kube-proxy, 6 argocd), all at 1. `coredns_dns_requests_total` should arrive as a cumulative counter, and Argo CD's `workqueue_depth` as a gauge.
+- **Status page:** run it locally against the same org. It should show a `minikube` cluster with argocd, coredns and kube-proxy up. The 30-day history bars stay grey for about the first hour, until Splunk has hourly rollups.
 
 To iterate, edit `agent.py` or the checks and re-run step 2. The ConfigMap hash changes, so the pod restarts with the new code.

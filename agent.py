@@ -5,8 +5,10 @@ import json
 import math
 import os
 import re
+import signal
 import socket
 import ssl
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -148,6 +150,9 @@ def otlp(points, ts_ns):
 
 
 def main():
+    # As PID 1 in the container, Python ignores SIGTERM unless it has a handler, so pod shutdown would wait
+    # out the whole grace period. Exit at once instead; a lost in-flight cycle is harmless.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     cluster = os.environ["CLUSTER_NAME"]
     interval = int(os.environ.get("INTERVAL_SECONDS", "60"))
     # Default: OTLP/HTTP on the Splunk OTel Collector agent on this node (hostNetwork, :4318); it adds its own token.

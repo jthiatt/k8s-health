@@ -1,18 +1,84 @@
 {
   "coredns": [
-    {"kind": "deployment", "namespace": "kube-system", "name": "coredns"},
-    {"dns": "kubernetes.default.svc.cluster.local."},
-    {"dns": "sts.amazonaws.com."},
     {
-      "metrics": {"namespace": "kube-system", "selector": "k8s-app=kube-dns", "port": 9153},
-      "forward": ["coredns_dns_requests_total", "coredns_dns_responses_total", "coredns_panics_total"],
-      "max": {"coredns_panics_total": 0}
+      "kind": "deployment",
+      "namespace": "kube-system",
+      "name": "coredns"
+    },
+    {
+      "dns": "kubernetes.default.svc.cluster.local."
+    },
+    {
+      "dns": "sts.amazonaws.com."
+    },
+    {
+      "metrics": {
+        "namespace": "kube-system",
+        "selector": "k8s-app=kube-dns",
+        "port": 9153
+      },
+      "forward": [
+        "coredns_dns_requests_total",
+        "coredns_dns_responses_total",
+        "coredns_panics_total"
+      ],
+      "max": {
+        "coredns_panics_total": 0
+      }
     }
   ],
   "kube-proxy": [
-    {"kind": "daemonset", "namespace": "kube-system", "name": "kube-proxy"}
+    {
+      "kind": "daemonset",
+      "namespace": "kube-system",
+      "name": "kube-proxy"
+    }
   ],
-  "missing-example": [
-    {"kind": "deployment", "namespace": "argocd", "name": "argocd-server"}
+  "argocd": [
+    {
+      "kind": "deployment",
+      "namespace": "argocd",
+      "name": "argocd-server"
+    },
+    {
+      "kind": "deployment",
+      "namespace": "argocd",
+      "name": "argocd-repo-server"
+    },
+    {
+      "kind": "deployment",
+      "namespace": "argocd",
+      "name": "argocd-redis"
+    },
+    {
+      "kind": "statefulset",
+      "namespace": "argocd",
+      "name": "argocd-application-controller"
+    },
+    {
+      "metrics": {
+        "namespace": "argocd",
+        "selector": "app.kubernetes.io/name=argocd-application-controller",
+        "port": 8082
+      },
+      "forward": [
+        "argocd_app_info",
+        "argocd_app_sync_total",
+        "workqueue_depth"
+      ],
+      "max": {
+        "workqueue_depth": 100
+      }
+    },
+    {
+      "metrics": {
+        "namespace": "argocd",
+        "selector": "app.kubernetes.io/name=argocd-repo-server",
+        "port": 8084
+      },
+      "forward": [
+        "argocd_git_request_total"
+      ]
+    }
   ]
 }
