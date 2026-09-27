@@ -6,15 +6,15 @@ The dashboard that reads these metrics is a separate repo: [eks-status-page](htt
 
 ```
  each EKS cluster
-┌──────────────────────┐ :9943  ┌──────────────────────┐      ┌──────────────────────┐
-│ eks-health-agent     │ ─────▶ │ Splunk OTel Collector│ ───▶ │ Splunk Observability │ ◀── eks-status-page
+┌──────────────────────┐ :4318  ┌──────────────────────┐      ┌──────────────────────┐
+│ eks-health-agent     │ OTLP ▶ │ Splunk OTel Collector│ ───▶ │ Splunk Observability │ ◀── eks-status-page
 │  • workload readiness│        │ agent (same node)    │      │ metrics + detector   │     (reads the API)
 │  • DNS lookups       │        └──────────────────────┘      └──────────────────────┘
 │  • /metrics scrapes  │
 └──────────────────────┘
 ```
 
-The agent is a single Python script that uses only the standard library. It runs on the stock `python:3.12-slim` image and loads the script from a ConfigMap, so there's no image to build. It needs **no Splunk token**: the collector forwards its data using the ingest token the collector already has.
+The agent is a single Python script that uses only the standard library. It runs on the stock `python:3.12-slim` image and loads the script from a ConfigMap, so there's no image to build. It sends **OTLP/HTTP (JSON)** to the collector on its own node, the collector's standard input, so it works with a default chart install. It needs **no Splunk token**: the collector forwards the data with the ingest token it already has.
 
 ## How the agent and status page connect
 
@@ -34,7 +34,8 @@ The Splunk OTel Collector also adds its own host dimensions. The status page ign
 ## 1. Prerequisites
 
 - `kubectl` 1.21+ (for `kubectl apply -k`), with access to each cluster.
-- **The Splunk OTel Collector** (`splunk-otel-collector` Helm chart) running as a DaemonSet on every node, with its `signalfx` receiver on port 9943. The chart enables this receiver by default and serves it on the node IP. The agent finds its node's IP with the Downward API (`status.hostIP`). See [2a](#2a-check-the-collector-receiver).
+- **The Splunk OTel Collector** (`splunk-otel-collector` Helm chart, tested with 0.161.0) running as a DaemonSet on every node. The chart's node agent listens for OTLP/HTTP on port 4318, with host networking, on the node IP. That's on by default. The agent finds its node's IP with the Downward API (`status.hostIP`). See [2a](#2a-check-the-collector-receiver).
+  - Don't rely on the collector's `signalfx` receiver (port 9943). Current chart versions only run it on the optional gateway, not on the node agent.
 - Terraform with the `splunk-terraform/signalfx` provider (for the detector only).
 - **Service settings the agent's metrics checks depend on.** Change these in each service's Helm values, or remove the matching check from `checks.json`:
 
@@ -52,15 +53,15 @@ The Splunk OTel Collector also adds its own host dimensions. The status page ign
 
 ### 2a. Check the collector receiver
 
-Check that the node's collector accepts datapoints on 9943. Run this from any pod, using a node IP:
+Check that the node's collector accepts OTLP on 4318. Run this from any pod, using a node IP (`kubectl get nodes -o wide`):
 
 ```bash
-kubectl run sfx-probe --rm -it --restart=Never --image=curlimages/curl -- \
+kubectl run otlp-probe --rm -it --restart=Never --image=curlimages/curl -- \
   curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
-  -d '{"gauge":[]}' http://<node-ip>:9943/v2/datapoint
+  -d '{"resourceMetrics":[]}' http://<node-ip>:4318/v1/metrics
 ```
 
-`200` means it's ready. If the connection is refused, the receiver is disabled or not exposed on the node. Check the chart's `agent.config` for the `signalfx` receiver in the metrics pipeline, and the `signalfx` port under `agent.ports`. If you run the collector differently (for example as a gateway Deployment behind a Service), set `INGEST_URL` to its `/v2/datapoint` address instead.
+`200` means it's ready. If the connection is refused, check that the chart's `agent.ports.otlp-http` is still set (with `hostPort: 4318`) and that `otlp` is a receiver in the agent's `metrics` pipeline (`kubectl -n <ns> get cm -l component=otel-collector-agent -o yaml`). If you run the collector differently (for example as a gateway Deployment behind a Service), set `OTLP_ENDPOINT` to its OTLP/HTTP base URL instead.
 
 ### 2b. Set the cluster name
 
@@ -200,15 +201,15 @@ These defaults are the upstream Helm chart values. **Check the namespaces, label
 |---|---|---|
 | `CLUSTER_NAME` | required | The `cluster` dimension. Must be unique per cluster. |
 | `INTERVAL_SECONDS` | `60` | How often checks run. Must match the status page. |
-| `SPLUNK_OTEL_AGENT` | node IP (Downward API `status.hostIP`) | The host of the node-local collector. The agent sends to `http://<SPLUNK_OTEL_AGENT>:9943/v2/datapoint`. |
-| `INGEST_URL` | — | Overrides the full URL. Use it for a collector gateway, or send straight to `https://ingest.<realm>.signalfx.com/v2/datapoint` (which also needs `SPLUNK_ACCESS_TOKEN`). |
-| `SPLUNK_ACCESS_TOKEN` | — | Only needed when `INGEST_URL` is Splunk's own ingest endpoint. Sent as `X-SF-Token`. |
+| `SPLUNK_OTEL_AGENT` | node IP (Downward API `status.hostIP`) | The host of the node-local collector. The agent sends OTLP/HTTP JSON to `http://<SPLUNK_OTEL_AGENT>:4318/v1/metrics`. |
+| `OTLP_ENDPOINT` | — | Overrides the base URL (the agent appends `/v1/metrics`), for example a collector gateway Service: `http://splunk-otel-collector.<ns>:4318`. |
 | `CHECKS_FILE` | `/app/checks.json` | Location of the checks file. |
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
+| `collector rejected datapoints` in the agent logs | The collector accepted the request but dropped some points (the log line includes its reason). Check the collector's own logs. |
 | A whole cluster shows **stale** | The agent pod isn't running, or it can't reach the collector. Check `kubectl -n eks-status logs deploy/eks-health-agent` for `ingest failed`, then run the probe in [2a](#2a-check-the-collector-receiver). Also check that the collector pod on the agent's node is healthy, because the agent only sends to its own node's collector. |
 | A cluster is missing from the page | It has never reported. Check `CLUSTER_NAME`, and check that the collector on the agent's node is running and exporting (its own logs). |
 | `metrics/...` check is down with `no running pods match selector` | The label selector or namespace doesn't match your install. Compare with `kubectl get pods -n <ns> --show-labels`. |
@@ -223,7 +224,44 @@ These defaults are the upstream Helm chart values. **Check the namespaces, label
 ## Development
 
 ```bash
-python3 test_agent.py   # self-check: readiness, Prometheus parsing and types, selectors, thresholds
+python3 test_agent.py   # self-check: readiness, Prometheus parsing and types, selectors, thresholds, OTLP payload
 ```
 
 There's no build step and no dependencies. Edit `agent.py` or `checks.json` and re-apply the kustomization. The ConfigMap name includes a hash of its contents, so the pod restarts with the new version. Tag a release (`v0.x.y`) so cluster overlays can pin to it.
+
+## Testing on minikube
+
+`test/minikube/` runs the agent on a local minikube with the same collector chart used on EKS. minikube has none of the EKS add-ons, so it uses its own checks (`test/minikube/checks.json`):
+- **coredns:** the Deployment, internal and external DNS lookups, and a metrics check against CoreDNS's own Prometheus port (9153). This exercises pod discovery, scraping, forwarding and thresholds.
+- **kube-proxy:** a DaemonSet check.
+- **missing-example:** a Deployment that doesn't exist, so the down path is exercised too.
+
+**1. Install the collector** (once). Use a dedicated INGEST-only token, stored as a Secret so it never lands in git:
+
+```bash
+kubectl create namespace splunk-otel
+kubectl -n splunk-otel create secret generic splunk-otel-collector \
+  --from-literal=splunk_observability_access_token=<INGEST_TOKEN>
+helm repo add splunk-otel-collector-chart https://signalfx.github.io/splunk-otel-collector-chart
+helm upgrade --install otel splunk-otel-collector-chart/splunk-otel-collector --version 0.161.0 \
+  -n splunk-otel -f test/minikube/otel-values.yaml --wait
+```
+
+Use **Helm 3.8 or newer**. Older Helm (for example the 3.7 bundled with Rancher Desktop) fails to render this chart with `len of nil pointer`.
+
+`otel-values.yaml` differs from what you'd use on EKS in only two minikube workarounds, both commented:
+- **Kubelet TLS:** it skips TLS verification to the kubelet, because minikube's kubelet certificate has no IP address in it.
+- **Control-plane metrics:** it turns off controller-manager and scheduler metrics, because minikube binds them to localhost. On EKS the control plane isn't visible anyway.
+
+**2. Deploy the agent** from your working copy. This overlay sits inside the base's directory, so it references the base files directly and needs the relaxed load restrictor:
+
+```bash
+kubectl kustomize --load-restrictor LoadRestrictionsNone test/minikube | kubectl apply -f -
+```
+
+**3. Check:**
+- **Agent logs:** `kubectl -n eks-status logs deploy/eks-health-agent` should show exactly one warning, for `missing-example` (`HTTP Error 404`).
+- **Splunk:** within a minute or two, `eks.health.up` with `cluster:minikube` should show 6 series: five at 1 and one at 0. `coredns_dns_requests_total` should arrive as a cumulative counter.
+- **Status page:** run it locally against the same org. It should show a `minikube` cluster with coredns and kube-proxy up and missing-example down. The 30-day history bars stay grey for about the first hour, until Splunk has hourly rollups.
+
+To iterate, edit `agent.py` or the checks and re-run step 2. The ConfigMap hash changes, so the pod restarts with the new code.

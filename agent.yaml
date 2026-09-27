@@ -54,7 +54,7 @@ spec:
           env:
             - {name: CLUSTER_NAME, value: CHANGE-ME}  # patch per cluster
             - {name: INTERVAL_SECONDS, value: "60"}   # status page's INTERVAL_SECONDS must match
-            - name: SPLUNK_OTEL_AGENT  # node IP; the Splunk OTel Collector agent listens on :9943 there
+            - name: SPLUNK_OTEL_AGENT  # node IP; the Splunk OTel Collector agent serves OTLP/HTTP on :4318 there
               valueFrom: {fieldRef: {fieldPath: status.hostIP}}
           volumeMounts: [{name: app, mountPath: /app}]
           securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false}

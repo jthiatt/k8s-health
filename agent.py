@@ -1,6 +1,6 @@
 """EKS core-service health agent: every INTERVAL_SECONDS runs the checks in checks.json and pushes
-one `eks.health.up` gauge (1/0) per check to Splunk, dims: cluster, service, check.
-`metrics` checks also forward selected Prometheus series from the scraped endpoints."""
+one `eks.health.up` gauge (1/0) per check, dims: cluster, service, check, over OTLP/HTTP (JSON) to
+the node-local Splunk OTel Collector. `metrics` checks also forward selected Prometheus series."""
 import json
 import math
 import os
@@ -131,21 +131,33 @@ def label_of(c):
     return f"dns/{c['dns']}" if "dns" in c else f"{c['kind']}/{c['namespace']}/{c['name']}"
 
 
+def otlp(points, ts_ns):
+    """[(name, value, dims, splunk_type)] -> OTLP/HTTP JSON export request. The collector's signalfx exporter
+    turns gauges into gauges and monotonic cumulative sums into cumulative counters."""
+    metrics = {}
+    for name, value, dims, typ in points:
+        if name not in metrics:
+            data = ({"sum": {"aggregationTemporality": 2, "isMonotonic": True, "dataPoints": []}}  # 2 = CUMULATIVE
+                    if typ == "cumulative_counter" else {"gauge": {"dataPoints": []}})
+            metrics[name] = {"name": name, **data}
+        points_list = (metrics[name].get("sum") or metrics[name]["gauge"])["dataPoints"]
+        points_list.append({"timeUnixNano": str(ts_ns), "asDouble": float(value),
+                            "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in dims.items()]})
+    return {"resourceMetrics": [{"resource": {}, "scopeMetrics": [
+        {"scope": {"name": "eks-health-agent"}, "metrics": list(metrics.values())}]}]}
+
+
 def main():
     cluster = os.environ["CLUSTER_NAME"]
     interval = int(os.environ.get("INTERVAL_SECONDS", "60"))
-    # Default: the Splunk OTel Collector agent on this node (signalfx receiver), which adds its own token.
-    url = os.environ.get("INGEST_URL") or f"http://{bracket(os.environ['SPLUNK_OTEL_AGENT'])}:9943/v2/datapoint"
-    headers = {"Content-Type": "application/json"}
-    if os.environ.get("SPLUNK_ACCESS_TOKEN"):  # only needed when INGEST_URL is Splunk's ingest endpoint
-        headers["X-SF-Token"] = os.environ["SPLUNK_ACCESS_TOKEN"]
+    # Default: OTLP/HTTP on the Splunk OTel Collector agent on this node (hostNetwork, :4318); it adds its own token.
+    endpoint = os.environ.get("OTLP_ENDPOINT") or f"http://{bracket(os.environ['SPLUNK_OTEL_AGENT'])}:4318"
     with open(os.environ.get("CHECKS_FILE", "/app/checks.json")) as f:
         checks = json.load(f)
 
     while True:
         start = time.time()
-        ts = int(start * 1000)
-        payload = {"gauge": [], "cumulative_counter": []}
+        points = []
         for service, items in checks.items():
             for c in items:
                 extra = []
@@ -156,13 +168,15 @@ def main():
                     up = 0
                     print(json.dumps({"level": "warn", "service": service, "check": label_of(c), "error": str(e)}), flush=True)
                 base = {"cluster": cluster, "service": service}
-                payload["gauge"].append({"metric": METRIC, "value": up, "timestamp": ts,
-                                         "dimensions": {**base, "check": label_of(c)}})
-                for name, value, dims, kind in extra:
-                    payload[kind].append({"metric": name, "value": value, "timestamp": ts, "dimensions": {**dims, **base}})
+                points.append((METRIC, up, {**base, "check": label_of(c)}, "gauge"))
+                points += [(name, value, {**dims, **base}, typ) for name, value, dims, typ in extra]
         try:
-            req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
-            urllib.request.urlopen(req, timeout=10).close()
+            req = urllib.request.Request(f"{endpoint}/v1/metrics", data=json.dumps(otlp(points, int(start * 1e9))).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                rejected = json.loads(r.read() or b"{}").get("partialSuccess", {})
+            if rejected.get("rejectedDataPoints"):
+                print(json.dumps({"level": "error", "msg": "collector rejected datapoints", **rejected}), flush=True)
         except Exception as e:
             print(json.dumps({"level": "error", "msg": "ingest failed", "error": str(e)}), flush=True)
         time.sleep(max(0, interval - (time.time() - start)))

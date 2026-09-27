@@ -1,0 +1,18 @@
+{
+  "coredns": [
+    {"kind": "deployment", "namespace": "kube-system", "name": "coredns"},
+    {"dns": "kubernetes.default.svc.cluster.local."},
+    {"dns": "sts.amazonaws.com."},
+    {
+      "metrics": {"namespace": "kube-system", "selector": "k8s-app=kube-dns", "port": 9153},
+      "forward": ["coredns_dns_requests_total", "coredns_dns_responses_total", "coredns_panics_total"],
+      "max": {"coredns_panics_total": 0}
+    }
+  ],
+  "kube-proxy": [
+    {"kind": "daemonset", "namespace": "kube-system", "name": "kube-proxy"}
+  ],
+  "missing-example": [
+    {"kind": "deployment", "namespace": "argocd", "name": "argocd-server"}
+  ]
+}

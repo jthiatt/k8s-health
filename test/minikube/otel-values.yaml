@@ -1,0 +1,26 @@
+# Splunk OTel Collector for local minikube testing (chart splunk-otel-collector 0.161.0).
+# Same chart as EKS with defaults, so the agent talks to the node-local collector the same way (OTLP/HTTP :4318).
+# On EKS you'd also set distribution: eks and cloudProvider: aws.
+clusterName: minikube
+splunkObservability:
+  realm: us1
+  metricsEnabled: true
+  tracesEnabled: false
+# Token comes from a pre-created Secret (key: splunk_observability_access_token) so it never lands in git.
+secret:
+  create: false
+  name: splunk-otel-collector
+  validateSecret: false
+agent:
+  # minikube-only: the kubelet serving cert has no IP SAN, so TLS verification of ${K8S_NODE_IP}:10250 fails.
+  # EKS kubelet certs include the node IP; don't copy this to EKS.
+  config:
+    receivers:
+      kubelet_stats:
+        insecure_skip_verify: true
+  # minikube binds these to 127.0.0.1; on EKS the control plane isn't reachable from nodes at all.
+  controlPlaneMetrics:
+    controllerManager:
+      enabled: false
+    scheduler:
+      enabled: false

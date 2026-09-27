@@ -1,7 +1,7 @@
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from agent import matches, parse_prom, ready, scrape
+from agent import matches, otlp, parse_prom, ready, scrape
 
 PROM = """# HELP workqueue_depth Current depth
 # TYPE workqueue_depth gauge
@@ -72,4 +72,14 @@ assert not ready("deployment", {"spec": {"replicas": 2}, "status": {"readyReplic
 assert not ready("deployment", {"spec": {"replicas": 0}, "status": {}})
 assert ready("daemonset", {"status": {"desiredNumberScheduled": 3, "numberReady": 3}})
 assert not ready("daemonset", {"status": {"desiredNumberScheduled": 3, "numberReady": 2}})
+# OTLP payload: one metric per name; counters as monotonic cumulative sums, the rest as gauges
+req = otlp([("eks.health.up", 1, {"cluster": "c1", "service": "coredns", "check": "dns/x."}, "gauge"),
+            ("eks.health.up", 0, {"cluster": "c1", "service": "coredns", "check": "deployment/kube-system/coredns"}, "gauge"),
+            ("coredns_dns_requests_total", 42, {"cluster": "c1", "pod": "coredns-1"}, "cumulative_counter")], 1_700_000_000 * 10**9)
+metrics = {m["name"]: m for m in req["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
+up = metrics["eks.health.up"]["gauge"]["dataPoints"]
+assert [p["asDouble"] for p in up] == [1.0, 0.0] and up[0]["timeUnixNano"] == "1700000000000000000"
+assert {"key": "check", "value": {"stringValue": "dns/x."}} in up[0]["attributes"]
+counter = metrics["coredns_dns_requests_total"]["sum"]
+assert counter["isMonotonic"] and counter["aggregationTemporality"] == 2 and counter["dataPoints"][0]["asDouble"] == 42.0
 print("ok")
