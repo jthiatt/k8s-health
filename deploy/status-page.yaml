@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eks-status-page
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: eks-status-page}
+  template:
+    metadata:
+      labels: {app: eks-status-page}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65534}
+      containers:
+        - name: page
+          image: eks-status-page  # set by kustomization.yaml `images`
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: INTERVAL_SECONDS, value: "60"}  # must match the agents
+            - {name: SPLUNK_REALM, value: us1}
+            - {name: DETECTOR_MATCH, value: eks}
+            - {name: HISTORY_DAYS, value: "30"}
+            - {name: INCIDENT_DAYS, value: "7"}
+            - name: SPLUNK_API_TOKEN
+              valueFrom: {secretKeyRef: {name: splunk-api, key: token}}
+          readinessProbe: {httpGet: {path: /healthz, port: 8080}}
+          livenessProbe: {httpGet: {path: /healthz, port: 8080}}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false}
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 256Mi}  # 30 days of hourly history per check is held in memory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eks-status-page
+spec:
+  selector: {app: eks-status-page}
+  ports: [{port: 80, targetPort: 8080}]
