@@ -1,6 +1,6 @@
 # EKS Health Agent
 
-Runs in every EKS cluster. At a fixed interval it checks the core platform services (CoreDNS, Cilium, FluxCD, Argo CD, Traefik, External Secrets, ExternalDNS, Karpenter). It sends one up/down gauge per check to Splunk Observability Cloud through the node-local Splunk OTel Collector, plus selected Prometheus series from each service. This repo also contains the Splunk detector (`detector.tf`) that alerts on those metrics.
+Runs in every EKS cluster. At a fixed interval it checks the core platform services (CoreDNS, Cilium, FluxCD, Argo CD, Traefik, External Secrets, ExternalDNS, Karpenter). It sends one up/down gauge per check to Splunk Observability Cloud through the node-local Splunk OTel Collector, plus selected Prometheus series from each service. This repo also contains the Splunk detector and dashboard for those metrics (Terraform, in `splunk/`).
 
 The dashboard that reads these metrics is a separate repo: [eks-status-page](https://github.com/jthiatt/eks-status-page).
 
@@ -25,7 +25,7 @@ The agent ([eks-health-agent](https://github.com/jthiatt/eks-health-agent)) and 
 | Metric `eks.health.up`, gauge, 1 = up / 0 = down | One datapoint per check per interval | The only metric it reads |
 | Dimensions `cluster`, `service`, `check` | `CLUSTER_NAME`, the service keys in `checks.json`, the check label | Groups the page by cluster, then service; lists failing checks by `check` |
 | Check interval | `INTERVAL_SECONDS` (default 60) | `INTERVAL_SECONDS` must be the same, or healthy checks show as stale |
-| Detector names contain "EKS" | `detector.tf` in the agent repo | `DETECTOR_MATCH=eks` filters which incidents are shown |
+| Detector names contain "EKS" | `splunk/detector.tf` in the agent repo | `DETECTOR_MATCH=eks` filters which incidents are shown |
 
 The Splunk OTel Collector also adds its own host dimensions. The status page ignores those and merges series by `cluster`/`service`/`check`.
 
@@ -102,28 +102,42 @@ A healthy agent logs nothing. Every failed check logs a JSON line with `service`
 
 The collector also adds its own dimensions (`host.name`, `k8s.node.name`, `k8s.cluster.name`, cloud attributes). So when the agent pod moves to another node, each check starts a new series in Splunk. The status page merges series by `cluster`/`service`/`check` and keeps the newest point, and the detector groups by `cluster` and `service`, so neither is affected. If you build your own charts, group by those dimensions too.
 
-## 3. Create the detector
+## 3. Create the dashboard and detector
 
-`detector.tf` is a single `signalfx_detector` resource. Copy it into a Terraform config that has the SignalFx provider:
+`splunk/` is a self-contained Terraform config:
 
-```hcl
-terraform {
-  required_providers {
-    signalfx = { source = "splunk-terraform/signalfx" }
-  }
-}
+| File | Contents |
+|---|---|
+| `main.tf` | The provider and variables (`splunk_token`, `splunk_realm`), plus the `dashboard_url` output. |
+| `dashboard.tf` | Dashboard group **EKS** and dashboard **EKS health**. |
+| `detector.tf` | Detector **EKS core services**. |
 
-provider "signalfx" {
-  auth_token = var.splunk_api_token   # an API token that can manage detectors
-  api_url    = "https://api.us1.signalfx.com"
-}
-```
+Both need a Splunk API token that can manage dashboards and detectors:
 
 ```bash
-terraform init && terraform apply
+cd splunk
+export TF_VAR_splunk_token=<API_TOKEN>
+terraform init
+terraform apply                                          # dashboard + detector
+terraform apply -target=signalfx_dashboard.eks_health    # or the dashboard only
 ```
 
-It has no notification recipients, so it only raises incidents, which the status page shows. To be paged too, add `notifications = [...]` to the rules you care about.
+State is kept locally in `splunk/terraform.tfstate`, which is git-ignored. Only that machine can update or destroy these resources. For a team, add a remote backend (for example S3) to `main.tf`.
+
+### Dashboard
+
+**EKS health**, in dashboard group **EKS**. A **Cluster** filter at the top narrows every chart.
+- **Headline numbers:** clusters reporting, checks reporting, services down, checks down. The "down" numbers turn red above 0.
+- **Service health by cluster:** a heatmap, green or red per service.
+- **Failing checks:** each check whose latest value is 0, with its cluster and service.
+- **Service availability** over time, and **checks reporting per cluster**. A drop to 0 there means that cluster's agent, or its node's collector, stopped sending.
+- **Forwarded service metrics:** Cilium drops by reason, Flux reconcile errors, Argo CD apps that aren't Healthy, Traefik 5xx %, ExternalSecrets not Ready, and Karpenter nodepool usage as a % of its limit. Each stays empty until that service runs and its `metrics` check is enabled.
+
+The collector adds host dimensions that change when the agent pod moves to another node, so every chart aggregates by `cluster`/`service`/`check` rather than showing raw series.
+
+### Detector
+
+The detector has no notification recipients, so it only raises incidents, which the status page shows. To be paged too, add `notifications = [...]` to the rules you care about.
 
 | Rule | Severity | Fires when |
 |---|---|---|

@@ -1,5 +1,3 @@
-# Drop into a Terraform config that has the signalfx provider. Name contains "EKS" so the
-# status page (DETECTOR_MATCH=eks) picks up its incidents. Add notifications if you want paging.
 resource "signalfx_detector" "eks_core_services" {
   name        = "EKS core services"
   description = "An EKS core service is down or unhealthy, or a health agent stopped reporting"
