@@ -276,6 +276,15 @@ kubectl create namespace argocd
 kubectl apply -n argocd --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml
 ```
 
+**1c. Give Argo CD an app** (once), so it has something to report on. `test/minikube/argocd-app.yaml` is Argo CD's public guestbook example (no git credentials needed), synced automatically into the `guestbook` namespace:
+
+```bash
+kubectl apply -f test/minikube/argocd-app.yaml
+kubectl -n argocd get app guestbook   # SYNC STATUS Synced, HEALTH STATUS Healthy
+```
+
+Without an app, the `argocd_app_info`, `argocd_app_sync_total` and `argocd_git_request_total` series don't exist.
+
 **2. Deploy the agent** from your working copy. This overlay sits inside the base's directory, so it references the base files directly and needs the relaxed load restrictor:
 
 ```bash
@@ -284,7 +293,25 @@ kubectl kustomize --load-restrictor LoadRestrictionsNone test/minikube | kubectl
 
 **3. Check:**
 - **Agent logs:** `kubectl -n eks-status logs deploy/eks-health-agent` should show no warnings once Argo CD is ready. Every failing check logs one line per cycle.
-- **Splunk:** within a minute or two, `eks.health.up` with `cluster:minikube` should show 11 series (4 coredns, 1 kube-proxy, 6 argocd), all at 1. `coredns_dns_requests_total` should arrive as a cumulative counter, and Argo CD's `workqueue_depth` as a gauge.
+- **Splunk:** within a minute or two, `eks.health.up` with `cluster:minikube` should show 11 series (4 coredns, 1 kube-proxy, 6 argocd), all at 1. `coredns_dns_requests_total` should arrive as a cumulative counter, and Argo CD's `workqueue_depth` as a gauge. With the guestbook app, `argocd_app_info` should also appear, with `name=guestbook`, `health_status=Healthy` and `sync_status=Synced`. So should the counters `argocd_app_sync_total` (`phase=Succeeded`) and `argocd_git_request_total` (`fetch` and `ls-remote`).
+
+**Testing an unhealthy Argo CD app.** Point the guestbook at an image tag that doesn't exist:
+
+```bash
+kubectl -n argocd patch app guestbook --type merge \
+  -p '{"spec":{"source":{"kustomize":{"images":["gcr.io/google-samples/gb-frontend:does-not-exist"]}}}}'
+```
+
+What happens:
+- **At once:** the new pod can't pull its image. The app turns **Progressing**, and the dashboard's **Argo CD apps not Healthy** chart shows it within about a minute.
+- **After about 10 minutes** (the Deployment's progress deadline): Argo CD marks the app **Degraded**. The detector's **EKS Argo CD app degraded** rule would fire 10 minutes after that, if the detector is applied.
+- **The `argocd` service stays up.** Argo CD itself is healthy; only an app it manages is broken.
+
+Restore it:
+
+```bash
+kubectl -n argocd patch app guestbook --type merge -p '{"spec":{"source":{"kustomize":null}}}'
+```
 - **Status page:** run it locally against the same org. It should show a `minikube` cluster with argocd, coredns and kube-proxy up. The 30-day history bars stay grey for about the first hour, until Splunk has hourly rollups.
 
 To iterate, edit `agent.py` or the checks and re-run step 2. The ConfigMap hash changes, so the pod restarts with the new code.
