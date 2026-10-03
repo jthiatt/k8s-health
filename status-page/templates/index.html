@@ -1,0 +1,86 @@
+{%- macro icon(state) -%}
+<span class="pill {{ state }}" aria-hidden="true">
+  {%- if state == 'up' -%}
+  <svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg>
+  {%- elif state == 'stale' -%}
+  <svg viewBox="0 0 16 16"><path d="M8 4v5M8 12v.01"/></svg>
+  {%- else -%}
+  <svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>
+  {%- endif -%}
+</span>
+{%- endmacro -%}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="{{ interval }}">
+  <title>EKS Status</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="band"></div>
+<main>
+  <header class="card">
+    <h1>{{ icon(s.overall) }} {{ s.headline }}</h1>
+    <p class="muted">Last update {{ s.generated_ms | datetime_utc }}</p>
+  </header>
+
+  <div class="content">
+    {% for cluster, services in s.clusters | dictsort %}
+    <section class="cluster" aria-labelledby="c-{{ loop.index }}">
+      <h2 id="c-{{ loop.index }}">{{ cluster }}</h2>
+      {% for name, svc in services | dictsort %}
+      <article class="service">
+        <div class="service-head">
+          <h3>{{ icon(svc.state) }} {{ name }} <span class="sr-only">is {{ svc.state }}</span></h3>
+          <span class="muted">Operation in last {{ days }} days: {{ svc.uptime | pct }}</span>
+        </div>
+        <div class="bars" role="img" aria-label="{{ name }} daily uptime over the last {{ days }} days: {{ svc.uptime | pct }}">
+          {% for u in svc.history %}<span class="bar {{ u | bar }}" title="{{ s.days[loop.index0] | date }}: {{ u | pct }}"></span>{% endfor %}
+        </div>
+        {% if svc.state != 'up' %}
+        <ul class="issues">
+          {% for c in svc.checks if c.state != 'up' %}
+          <li><code>{{ c.check }}</code> {{ c.state }} · last seen {{ c.last_ms | ago }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </section>
+    {% else %}
+    <p class="muted empty">No agent has reported yet. Check that the agents are running and sending <code>eks.health.up</code>.</p>
+    {% endfor %}
+
+    <hr>
+
+    <section aria-labelledby="incidents">
+      <h2 id="incidents" class="big">Recent incidents</h2>
+      {% if s.incidents %}
+      <ol class="timeline">
+        {% for i in s.incidents %}
+        <li class="{{ 'active' if i.active else 'resolved' }}">
+          <time datetime="{{ i.started_ms | iso }}">{{ i.started_ms | date }}</time>
+          <span class="dot" aria-label="{{ 'ongoing' if i.active else 'resolved' }}">
+            {%- if i.active -%}<svg viewBox="0 0 16 16"><path d="M5 5l6 6M11 5l-6 6"/></svg>
+            {%- else -%}<svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7"/></svg>{%- endif -%}
+          </span>
+          <a class="bubble" href="{{ i.url }}">
+            {{ i.rule or i.detector }}
+            <small>{% if i.rule %}{{ i.detector }} · {% endif %}{{ i.severity }} ·
+              {% if i.active %}ongoing since {{ i.started_ms | ago }}{% else %}resolved {{ i.updated_ms | ago }}{% endif %}</small>
+          </a>
+        </li>
+        {% endfor %}
+      </ol>
+      {% else %}
+      <p class="muted">No incidents in the last {{ incident_days }} days.</p>
+      {% endif %}
+    </section>
+
+    <footer class="muted">Checks run every {{ interval }}s; a check is stale after {{ stale_after }}s without data. This page refreshes itself.</footer>
+  </div>
+</main>
+</body>
+</html>
