@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (git-ignored) and set who the deadman detector alerts.
+# Formats: "Email,<address>", "Team,<teamId>", "PagerDuty,<integrationId>", "Slack,<integrationId>,<channel>"
+deadman_notifications = ["Email,oncall@example.com"]

@@ -1,0 +1,6 @@
+namespace: eks-status
+resources:
+  - agent.yaml
+configMapGenerator:
+  - name: eks-health-agent
+    files: [agent.py, checks.json]
