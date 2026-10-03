@@ -106,25 +106,29 @@ Only the leader runs checks, so read the **leader's** logs. `kubectl logs deploy
 
 The collector also adds its own dimensions (`host.name`, `k8s.node.name`, `k8s.cluster.name`, cloud attributes). So when the agent pod moves to another node, each check starts a new series in Splunk. The status page merges series by `cluster`/`service`/`check` and keeps the newest point, and the detector groups by `cluster` and `service`, so neither is affected. If you build your own charts, group by those dimensions too.
 
-## 3. Create the dashboard and detector
+## 3. Create the dashboard and detectors
 
 `splunk/` is a self-contained Terraform config:
 
 | File | Contents |
 |---|---|
-| `main.tf` | The provider and variables (`splunk_token`, `splunk_realm`), plus the `dashboard_url` output. |
+| `main.tf` | The provider and variables (`splunk_token`, `splunk_realm`, `deadman_notifications`), plus the `dashboard_url` output. |
 | `dashboard.tf` | Dashboard group **EKS** and dashboard **EKS health**. |
-| `detector.tf` | Detector **EKS core services**. |
+| `detector.tf` | Detectors **EKS core services** and **EKS health agent deadman**. |
+| `terraform.tfvars.example` | Template for `terraform.tfvars` (git-ignored), which says who the dead man's switch alerts. |
 
-Both need a Splunk API token that can manage dashboards and detectors:
+They need a Splunk API token that can manage dashboards and detectors, plus a recipient for the dead man's switch:
 
 ```bash
 cd splunk
+cp terraform.tfvars.example terraform.tfvars   # then set deadman_notifications
 export TF_VAR_splunk_token=<API_TOKEN>
 terraform init
-terraform apply                                          # dashboard + detector
+terraform apply                                          # dashboard + both detectors
 terraform apply -target=signalfx_dashboard.eks_health    # or the dashboard only
 ```
+
+`deadman_notifications` has no default, and Terraform refuses an empty list. A dead man's switch that alerts nobody is no switch at all.
 
 State is kept locally in `splunk/terraform.tfstate`, which is git-ignored. Only that machine can update or destroy these resources. For a team, add a remote backend (for example S3) to `main.tf`.
 
@@ -139,14 +143,28 @@ State is kept locally in `splunk/terraform.tfstate`, which is git-ignored. Only 
 
 The collector adds host dimensions that change when the agent pod moves to another node, so every chart aggregates by `cluster`/`service`/`check` rather than showing raw series.
 
-### Detector
+### Dead man's switch: EKS health agent deadman
 
-The detector has no notification recipients, so it only raises incidents, which the status page shows. To be paged too, add `notifications = [...]` to the rules you care about.
+Every cluster's agent sends `eks.health.up` every minute. If the agent dies, the leader can't reach its collector, or the collector can't reach Splunk, those metrics stop. Every other detector then goes quiet, because there's nothing to evaluate, and the dashboard just shows gaps. This detector turns that silence into an alert.
+
+| Rule | Severity | Fires when | Notifies |
+|---|---|---|---|
+| EKS health agent not reporting | Major | A cluster that was reporting has sent no `eks.health.up` for 5 minutes | `deadman_notifications` |
+
+- **Grouped per cluster:** one silent cluster raises its own alert, naming the cluster.
+- **The message** names the cluster and lists what to check first: the agent pods, the Lease holder and its logs, then the collector on the leader's node. The detector's tip and runbook link point at [Troubleshooting](#troubleshooting).
+- **Recovery:** it resolves by itself when data returns, and sends a "Resolved" notification.
+- **Why 5 minutes:** that's 5 missed check intervals. A leader failover (at most 30 seconds) or a single collector blip won't trip it.
+- **Retiring a cluster:** its alert stays open until that cluster's series expire in Splunk. Mute the detector for that cluster, or close the incident, when you delete a cluster on purpose.
+- **Tested on minikube:** the agent was scaled to 0 at 20:38:23 UTC, after its last data point at ~20:38:12. The detector fired at 20:43:14 and sent the email, and resolved at 20:44:40, as soon as data returned.
+
+### Detector: EKS core services
+
+These rules have no notification recipients, so they only raise incidents, which the status page shows. To be paged too, add `notifications = [...]` to the rules you care about.
 
 | Rule | Severity | Fires when |
 |---|---|---|
 | EKS service down | Critical | Any check for a service has been 0 for 2 minutes |
-| EKS health agent not reporting | Major | A cluster's agent has sent nothing for 5 minutes |
 | EKS Cilium nodes unreachable | Critical | Cilium reports unreachable nodes for 5 minutes |
 | EKS Traefik 5xx rate high | Major | More than 5% of an entrypoint's requests are 5xx for 5 minutes |
 | EKS ExternalDNS registry errors | Major | Registry errors every minute for 10 minutes |
@@ -155,7 +173,7 @@ The detector has no notification recipients, so it only raises incidents, which 
 | EKS ExternalSecret not syncing | Warning | An ExternalSecret has been not Ready for 15 minutes |
 | EKS Karpenter nodepool near limit | Warning | A nodepool has been above 90% of a limit for 10 minutes |
 
-The page only lists incidents from detectors whose name contains `DETECTOR_MATCH` (default in the manifest: `eks`). Keep "EKS" in the names of any detectors you add.
+The status page only lists incidents from detectors whose name contains `DETECTOR_MATCH` (default in the manifest: `eks`). Keep "EKS" in the names of any detectors you add.
 
 ---
 

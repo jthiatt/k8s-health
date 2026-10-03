@@ -13,6 +13,15 @@ variable "splunk_token" {
   sensitive   = true
 }
 
+variable "deadman_notifications" {
+  description = "Who the deadman detector alerts when an agent stops reporting, as Splunk notification strings: \"Email,<address>\", \"Team,<teamId>\", \"PagerDuty,<integrationId>\", \"Slack,<integrationId>,<channel>\". Set in terraform.tfvars."
+  type        = list(string)
+  validation {
+    condition     = length(var.deadman_notifications) > 0
+    error_message = "The deadman detector needs at least one recipient, or nobody hears about a silent agent."
+  }
+}
+
 variable "splunk_realm" {
   type    = string
   default = "us1"

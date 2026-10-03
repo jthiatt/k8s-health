@@ -1,12 +1,10 @@
 resource "signalfx_detector" "eks_core_services" {
   name        = "EKS core services"
-  description = "An EKS core service is down or unhealthy, or a health agent stopped reporting"
+  description = "An EKS core service is down or unhealthy. (A silent agent is the deadman detector's job.)"
 
   program_text = <<-EOF
-    from signalfx.detectors.not_reporting import not_reporting
     up = data('eks.health.up').min(by=['cluster', 'service'])
     detect(when(up < 1, lasting='2m')).publish('EKS service down')
-    not_reporting.detector(stream=data('eks.health.up'), resource_identifier=['cluster'], duration='5m').publish('EKS health agent not reporting')
     flux_errors = data('controller_runtime_reconcile_errors_total', filter=filter('service', 'fluxcd'), rollup='delta').sum(by=['cluster', 'controller'])
     detect(when(flux_errors > 0, lasting='10m')).publish('EKS Flux reconcile errors')
     argo_degraded = data('argocd_app_info', filter=filter('service', 'argocd') and filter('health_status', 'Degraded')).count(by=['cluster', 'name'])
@@ -28,11 +26,6 @@ resource "signalfx_detector" "eks_core_services" {
   rule {
     detect_label = "EKS service down"
     severity     = "Critical"
-  }
-
-  rule {
-    detect_label = "EKS health agent not reporting"
-    severity     = "Major"
   }
 
   rule {
@@ -68,5 +61,43 @@ resource "signalfx_detector" "eks_core_services" {
   rule {
     detect_label = "EKS Karpenter nodepool near limit"
     severity     = "Warning"
+  }
+}
+
+# Dead man's switch: every cluster's agent sends eks.health.up every INTERVAL_SECONDS (60). If a cluster that
+# was reporting goes silent for 5 minutes, page someone. Without this, a dead agent looks like "no news" on
+# every other detector and the dashboard, and only shows up as "stale" on the status page.
+resource "signalfx_detector" "eks_agent_deadman" {
+  name        = "EKS health agent deadman"
+  description = "A cluster's eks-health-agent has stopped sending eks.health.up to Splunk"
+
+  program_text = <<-EOF
+    from signalfx.detectors.not_reporting import not_reporting
+    not_reporting.detector(stream=data('eks.health.up'), resource_identifier=['cluster'], duration='5m').publish('EKS health agent not reporting')
+  EOF
+
+  rule {
+    detect_label  = "EKS health agent not reporting"
+    severity      = "Major"
+    notifications = var.deadman_notifications
+    runbook_url   = "https://github.com/jthiatt/eks-health-agent#troubleshooting"
+    tip           = "Find the leader: kubectl -n eks-status get lease eks-health-agent. Then check its logs for 'ingest failed', and that the Splunk OTel Collector pod on its node is running."
+
+    parameterized_subject = "{{#if anomalous}}EKS health agent not reporting: {{dimensions.cluster}}{{else}}Resolved: EKS health agent reporting again: {{dimensions.cluster}}{{/if}}"
+    parameterized_body    = <<-EOF
+      {{#if anomalous}}
+      The eks-health-agent in cluster {{dimensions.cluster}} has not sent eks.health.up to Splunk for 5 minutes.
+      Until it is fixed, every check for this cluster is blind: the status page shows it as stale and no other EKS alert can fire for it.
+
+      What to check:
+      1. Agent pods: kubectl -n eks-status get pods -l app=eks-health-agent   (3 replicas, READY 1/1)
+      2. Leader:     kubectl -n eks-status get lease eks-health-agent        (HOLDER should be a running pod)
+         Logs:       kubectl -n eks-status logs <holder>                      ('ingest failed' = can't reach the collector)
+      3. Collector:  the Splunk OTel Collector agent pod on the leader's node, and its own logs
+      {{else}}
+      The eks-health-agent in cluster {{dimensions.cluster}} is sending eks.health.up again.
+      {{/if}}
+      Detector: {{detectorName}}  |  Rule: {{ruleName}}  |  Time: {{timestamp}}
+    EOF
   }
 }
