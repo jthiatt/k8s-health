@@ -149,6 +149,12 @@ resource "signalfx_time_chart" "karpenter_usage" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "keda_errors" {
+  name         = "KEDA ScaledObject errors/s"
+  program_text = "data('keda_scaled_object_errors_total', filter=filter('service', 'keda'), rollup='rate').sum(by=['cluster', 'namespace', 'scaledObject']).publish('errors/s')"
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -268,6 +274,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.karpenter_usage.id
     row      = 6
     column   = 8
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.keda_errors.id
+    row      = 7
+    column   = 0
     width    = 4
     height   = 1
   }

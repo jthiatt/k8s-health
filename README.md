@@ -143,12 +143,15 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
 | external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | minikube (chart 1.23) |
 | karpenter | `kube-system/karpenter` | :8080, on | pod can't be scraped | not yet |
+| keda | operator, metrics-apiserver, admission-webhooks in `keda` | operator :8080, **off by default** | pod can't be scraped | minikube (KEDA 2.21, metrics on) |
 
 "Not yet" means the profile follows the component's upstream Helm chart defaults (names, namespaces, labels, ports), but nobody has run it against a live install. Check it against your cluster, and please send a PR with fixes or a "tested on" entry.
 
 Some forwarded series only exist in some setups or once the component is in use. `cilium_operator_ipam_ips` is only exported in Cilium's cloud IPAM modes (AWS ENI, Azure, multi-pool), `traefik_entrypoint_requests_total` appears after Traefik serves its first request, and `externalsecret_sync_calls_total` once an ExternalSecret exists. Until then their dashboard charts stay empty; that's expected.
 
 **Upgrading:** use `helm upgrade --reset-then-reuse-values` (Helm 3.14+), as in the quick start. Plain `--reuse-values` also keeps the *previous* chart's defaults, so improved profiles in a new version would be silently ignored.
+
+Turn KEDA's metrics on (`agent.profiles.keda.metrics=true`) only after enabling them in KEDA (`prometheus.operator.enabled=true`).
 
 Turn Cilium's metrics on (`agent.profiles.cilium.metrics=true`) only after enabling them in Cilium itself (`prometheus.enabled` and `operator.prometheus.enabled`). Otherwise the scrape fails, and Cilium shows as down.
 
@@ -239,6 +242,7 @@ These rules have no recipients by default, so they only raise incidents, which t
 | Argo CD app degraded | Warning | An app has been `Degraded` for 10 minutes |
 | ExternalSecret not syncing | Warning | An ExternalSecret has been not Ready for 15 minutes |
 | Karpenter nodepool near limit | Warning | A nodepool has been above 90% of a limit for 10 minutes |
+| KEDA scaling errors | Warning | A ScaledObject has errors every minute for 10 minutes (needs KEDA metrics on) |
 
 Rules for add-ons you don't run never fire.
 

@@ -38,6 +38,15 @@ tests:
     asserts:
       - notMatchRegex: {path: 'data["checks.json"]', pattern: '"port": 9962'}  # cilium metrics off by default
       - matchRegex: {path: 'data["checks.json"]', pattern: '"port": 8082'}     # argocd metrics on by default
+  - it: includes the KEDA profile, with its metrics scrape off until KEDA's own metrics are enabled
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"keda": \{\s*"checks": \[.*?"name": "keda-operator".*?\],\s*"mode": "auto"'}
+      - notMatchRegex: {path: 'data["checks.json"]', pattern: 'keda_scaled_object_errors_total'}
+  - it: scrapes KEDA's operator metrics when its metrics toggle is on
+    set:
+      agent.profiles.keda.metrics: true
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: 'keda_scaled_object_errors_total'}
   - it: turns Cilium metrics on when asked
     set:
       agent.profiles.cilium.metrics: true

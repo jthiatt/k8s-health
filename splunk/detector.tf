@@ -21,6 +21,8 @@ resource "signalfx_detector" "core_services" {
     k_usage = data('karpenter_nodepools_usage', filter=filter('service', 'karpenter')).max(by=['cluster', 'nodepool', 'resource_type'])
     k_limit = data('karpenter_nodepools_limit', filter=filter('service', 'karpenter')).max(by=['cluster', 'nodepool', 'resource_type'])
     detect(when(k_usage / k_limit > 0.9, lasting='10m')).publish('Karpenter nodepool near limit')
+    keda_errors = data('keda_scaled_object_errors_total', filter=filter('service', 'keda'), rollup='delta').sum(by=['cluster', 'namespace', 'scaledObject'])
+    detect(when(keda_errors > 0, lasting='10m')).publish('KEDA scaling errors')
   EOF
 
   rule {
@@ -60,6 +62,11 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "Karpenter nodepool near limit"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "KEDA scaling errors"
     severity     = "Warning"
   }
 }

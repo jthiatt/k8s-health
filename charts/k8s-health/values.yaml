@@ -162,6 +162,18 @@ agent:
         - metrics: {namespace: kube-system, selector: app.kubernetes.io/name=karpenter, port: 8080}
           forward: [karpenter_nodepools_usage, karpenter_nodepools_limit, karpenter_cloudprovider_errors_total, karpenter_nodeclaims_created_total, karpenter_nodeclaims_disrupted_total, karpenter_interruption_received_messages_total]
 
+    keda:
+      enabled: auto
+      metrics: false  # needs prometheus.operator.enabled=true in KEDA's Helm values
+      checks:
+        - {kind: deployment, namespace: keda, name: keda-operator}
+        - {kind: deployment, namespace: keda, name: keda-operator-metrics-apiserver}
+        - {kind: deployment, namespace: keda, name: keda-admission-webhooks}
+      metricsChecks:
+        - metrics: {namespace: keda, selector: app.kubernetes.io/name=keda-operator, port: 8080}
+          # Names as exported by KEDA 2.21. Per-ScaledObject series, so cardinality grows with ScaledObjects.
+          forward: [keda_scaled_object_errors_total, keda_scaler_detail_errors_total, keda_scaled_object_paused, keda_internal_scale_loop_latency_seconds]
+
   # -- Your own services, same shape as a profile: {name: {enabled: true|auto, checks: [...]}}
   extraServices: {}
 
