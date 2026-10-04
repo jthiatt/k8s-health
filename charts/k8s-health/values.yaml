@@ -98,8 +98,10 @@ agent:
         - {kind: deployment, namespace: flux-system, name: notification-controller}
       metricsChecks:
         - metrics: {namespace: flux-system, selector: "app in (source-controller,kustomize-controller,helm-controller,notification-controller)", port: 8080}
-          forward: [controller_runtime_reconcile_errors_total, controller_runtime_reconcile_total, workqueue_depth]
-          max: {workqueue_depth: 100}
+          # Flux doesn't export workqueue_depth (checked on v2.9). A reconcile running far longer than Flux's
+          # default timeouts (5m) means a controller is stuck.
+          forward: [controller_runtime_reconcile_errors_total, controller_runtime_reconcile_total, workqueue_longest_running_processor_seconds]
+          max: {workqueue_longest_running_processor_seconds: 900}
 
     argocd:
       enabled: auto

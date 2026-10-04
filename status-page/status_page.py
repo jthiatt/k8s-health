@@ -14,7 +14,8 @@ from flask import Flask, jsonify, render_template
 REALM = os.environ.get("SPLUNK_REALM", "us1")
 API = f"https://api.{REALM}.signalfx.com"
 APP = f"https://app.{REALM}.observability.splunkcloud.com"
-TOKEN = os.environ.get("SPLUNK_API_TOKEN", "")
+# strip(): a token written to a Secret with `echo`/a file usually ends in "\n", which is an invalid header value
+TOKEN = os.environ.get("SPLUNK_API_TOKEN", "").strip()
 INTERVAL = int(os.environ.get("INTERVAL_SECONDS", "60"))
 STALE_AFTER = int(os.environ.get("STALE_AFTER_SECONDS", str(3 * INTERVAL)))
 DETECTOR_MATCH = os.environ.get("DETECTOR_MATCH", "k8s-health").lower()  # substring of detector names; "" = all

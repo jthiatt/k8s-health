@@ -1,5 +1,7 @@
 # k8s-health
 
+[![ci](https://github.com/jthiatt/k8s-health/actions/workflows/ci.yaml/badge.svg)](https://github.com/jthiatt/k8s-health/actions/workflows/ci.yaml) [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 Health checks for any Kubernetes cluster's core services, reported to **Splunk Observability Cloud**, with alerts, a dashboard and an optional status page.
 
 - **Agent** (`agent/`): runs in each cluster. Every minute it checks the API server, cluster DNS, node readiness and the add-ons it finds (CoreDNS, Cilium, Argo CD, Flux and more). It sends one up/down gauge per check, `k8s.health.up`, through the Splunk OTel Collector you already run, plus selected Prometheus series from those add-ons.
@@ -20,7 +22,7 @@ Health checks for any Kubernetes cluster's core services, reported to **Splunk O
 
 ## Requirements
 
-1. **A Kubernetes cluster.** Any conformant distribution (EKS, GKE, AKS, kind, minikube, k3s, bare metal), with `kubectl` and **Helm 3.8+** to install.
+1. **A Kubernetes cluster.** Any conformant distribution (EKS, GKE, AKS, kind, minikube, k3s, bare metal), with `kubectl` and **Helm 3.14+** to install.
 2. **A Splunk Observability Cloud account**, and its realm (shown under Settings → Organization, for example `us1` or `eu0`).
 3. **The Splunk OTel Collector installed on the cluster**, sending metrics to that account. This is the [`splunk-otel-collector` Helm chart](https://github.com/signalfx/splunk-otel-collector-chart). With its defaults, its per-node agent accepts OTLP on port 4318 of each node, which is where the k8s-health agent sends. If you run a gateway instead, point the agent at it with `agent.otlpEndpoint`.
 4. **Splunk access tokens** (Settings → Access Tokens):
@@ -72,7 +74,7 @@ One status page shows every cluster, so enable it in one install only:
 
 ```bash
 kubectl -n k8s-health create secret generic k8s-health-splunk-api --from-literal=token=<API read token>
-helm upgrade k8s-health oci://ghcr.io/jthiatt/charts/k8s-health -n k8s-health --reuse-values \
+helm upgrade k8s-health oci://ghcr.io/jthiatt/charts/k8s-health -n k8s-health --reset-then-reuse-values \
   --set statusPage.enabled=true \
   --set statusPage.splunk.realm=<realm> \
   --set statusPage.splunk.existingSecret=k8s-health-splunk-api
@@ -126,15 +128,19 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | coredns | `kube-system/coredns` | :9153, on by default | any CoreDNS panic | minikube |
 | kube-dns | `kube-system/kube-dns` (GKE) | none | none | not yet |
 | kube-proxy | `kube-system/kube-proxy` DaemonSet | none | none | minikube |
-| cilium | `cilium` DaemonSet, `cilium-operator` | :9962 and :9963, **off by default** | an eBPF map over 90% full | not yet |
-| fluxcd | 4 controllers in `flux-system` | :8080, on | work queue over 100 | not yet |
+| cilium | `cilium` DaemonSet, `cilium-operator` | :9962 and :9963, **off by default** | an eBPF map over 90% full | minikube (Cilium 1.20, metrics on) |
+| fluxcd | 4 controllers in `flux-system` | :8080, on | a reconcile running over 15 minutes | minikube (Flux v2.9) |
 | argocd | server, repo-server, redis, application-controller | :8082 and :8084, on | work queue over 100 | minikube |
-| traefik | `traefik/traefik` | :9100, on | pod can't be scraped | not yet |
-| external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | not yet |
-| external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | not yet |
+| traefik | `traefik/traefik` | :9100, on | pod can't be scraped | minikube (chart 41.6, Traefik v3.7) |
+| external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
+| external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | minikube (chart 1.23) |
 | karpenter | `kube-system/karpenter` | :8080, on | pod can't be scraped | not yet |
 
 "Not yet" means the profile follows the component's upstream Helm chart defaults (names, namespaces, labels, ports), but nobody has run it against a live install. Check it against your cluster, and please send a PR with fixes or a "tested on" entry.
+
+Some forwarded series only exist in some setups or once the component is in use. `cilium_operator_ipam_ips` is only exported in Cilium's cloud IPAM modes (AWS ENI, Azure, multi-pool), `traefik_entrypoint_requests_total` appears after Traefik serves its first request, and `externalsecret_sync_calls_total` once an ExternalSecret exists. Until then their dashboard charts stay empty; that's expected.
+
+**Upgrading:** use `helm upgrade --reset-then-reuse-values` (Helm 3.14+), as in the quick start. Plain `--reuse-values` also keeps the *previous* chart's defaults, so improved profiles in a new version would be silently ignored.
 
 Turn Cilium's metrics on (`agent.profiles.cilium.metrics=true`) only after enabling them in Cilium itself (`prometheus.enabled` and `operator.prometheus.enabled`). Otherwise the scrape fails, and Cilium shows as down.
 

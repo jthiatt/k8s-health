@@ -1,4 +1,8 @@
-import status_page
+import os
+
+os.environ["SPLUNK_API_TOKEN"] = "abc123\n"  # as written by `echo token > file; kubectl create secret --from-file`
+import status_page  # noqa: E402
+assert status_page.TOKEN == "abc123", repr(status_page.TOKEN)
 from status_page import DAY, STALE_AFTER, history, summarize
 
 now = 10**12

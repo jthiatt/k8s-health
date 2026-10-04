@@ -59,7 +59,7 @@ helm install k8s-health charts/k8s-health -n k8s-health --set clusterName=miniku
   --set statusPage.enabled=true --set statusPage.splunk.realm=<realm> --set statusPage.splunk.existingSecret=k8s-health-splunk-api
 ```
 
-**After changing code:** rebuild with a **new tag** (e.g. `:dev2`), then `helm upgrade ... --set agent.image.tag=dev2`. With `IfNotPresent`, reusing a tag keeps the old image.
+**After changing code:** rebuild with a **new tag** (e.g. `:dev2`), then `helm upgrade ... --reset-then-reuse-values --set agent.image.tag=dev2`. After changing only `values.yaml`, `helm upgrade --reset-then-reuse-values` is enough; plain `--reuse-values` would keep the old defaults. With `IfNotPresent`, reusing a tag keeps the old image.
 
 **minikube quirks:**
 - `dev/minikube/otel-values.yaml` works around two minikube-only collector issues, both commented there.
@@ -82,6 +82,10 @@ helm install k8s-health charts/k8s-health -n k8s-health --set clusterName=miniku
 3. **Optionally, alert on it:** add a rule to `splunk/detector.tf` and a chart to `splunk/dashboard.tf`.
 4. **Add it to the README's** "What gets checked" table. Put where you tested it under **Tested on**, or `not yet`.
 5. **Test it:** install the component somewhere (minikube or kind is fine). Show the leader detecting it and all checks passing, then a failure after scaling a workload to 0. Paste the logs in the pull request.
+
+## Reporting security problems
+
+Please don't open public issues for those. See [SECURITY.md](SECURITY.md).
 
 ## Pull requests
 
