@@ -271,6 +271,16 @@ resource "signalfx_time_chart" "envoy_gateway_5xx" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "otel_collectors" {
+  name         = "OpenTelemetry collectors: failed exports and refused data /s"
+  description  = "Collectors managed by the OpenTelemetry Operator"
+  program_text = <<-EOF
+    data('otelcol_exporter_send_failed_*', filter=filter('service', 'opentelemetry-operator'), rollup='rate').sum(by=['cluster', 'exporter']).publish('failed exports')
+    data('otelcol_receiver_refused_*', filter=filter('service', 'opentelemetry-operator'), rollup='rate').sum(by=['cluster', 'receiver']).publish('refused')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -488,6 +498,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.envoy_gateway_5xx.id
     row      = 11
     column   = 4
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.otel_collectors.id
+    row      = 11
+    column   = 8
     width    = 4
     height   = 1
   }

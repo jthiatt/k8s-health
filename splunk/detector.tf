@@ -60,6 +60,8 @@ resource "signalfx_detector" "core_services" {
     eg_all = data('envoy_http_downstream_rq_xx', filter=eg_listeners, rollup='rate').sum(by=['cluster', 'envoy_http_conn_manager_prefix'])
     eg_5xx = data('envoy_http_downstream_rq_xx', filter=eg_listeners and filter('envoy_response_code_class', '5'), rollup='rate').sum(by=['cluster', 'envoy_http_conn_manager_prefix'])
     detect(when(eg_5xx / eg_all > 0.05, lasting='5m')).publish('Envoy Gateway 5xx rate high')
+    otel_failed = data('otelcol_exporter_send_failed_*', filter=filter('service', 'opentelemetry-operator'), rollup='delta').sum(by=['cluster', 'pod', 'exporter'])
+    detect(when(otel_failed > 0, lasting='10m')).publish('OpenTelemetry collector export failing')
   EOF
 
   rule {
@@ -184,6 +186,11 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "Envoy Gateway 5xx rate high"
+    severity     = "Major"
+  }
+
+  rule {
+    detect_label = "OpenTelemetry collector export failing"
     severity     = "Major"
   }
 }

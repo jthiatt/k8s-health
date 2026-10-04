@@ -70,6 +70,10 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"envoy-gateway": \{\s*"checks": \[.*?"name": "envoy-gateway".*?\],\s*"mode": "auto"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"optional": true,\s*"path": "/stats/prometheus",\s*"port": 19001'}
+  - it: includes the OpenTelemetry Operator profile, with collector scrapes optional
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"selector": "app.kubernetes.io/name=opentelemetry-operator,app.kubernetes.io/component=controller-manager"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"optional": true,\s*"port": 8888,\s*"selector": "app.kubernetes.io/managed-by=opentelemetry-operator'}
   - it: includes the Falco profile, with metrics off by default
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"falco": \{\s*"checks": \[\s*\{\s*"kind": "daemonset",\s*"selector": "app.kubernetes.io/name=falco"\s*\}\s*\]'}

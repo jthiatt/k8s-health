@@ -195,6 +195,23 @@ agent:
           forward: [envoy_listener_manager_lds_update_rejected, envoy_cluster_manager_cds_update_rejected]
           aggregate: {envoy_http_downstream_rq_xx: [envoy_http_conn_manager_prefix, envoy_response_code_class]}
 
+    # OpenTelemetry Operator, and every collector it manages (none until an OpenTelemetryCollector exists).
+    opentelemetry-operator:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, selector: 'app.kubernetes.io/name=opentelemetry-operator,app.kubernetes.io/component=controller-manager'}
+      metricsChecks:
+        - metrics: {selector: 'app.kubernetes.io/managed-by=opentelemetry-operator,app.kubernetes.io/component=opentelemetry-collector', port: 8888, optional: true}
+          forward: [otelcol_exporter_queue_size, otelcol_exporter_queue_capacity]
+          aggregate:  # one series per exporter / receiver (they're also labeled by URL and transport)
+            otelcol_exporter_send_failed_spans: [exporter]
+            otelcol_exporter_send_failed_metric_points: [exporter]
+            otelcol_exporter_send_failed_log_records: [exporter]
+            otelcol_receiver_refused_spans: [receiver]
+            otelcol_receiver_refused_metric_points: [receiver]
+            otelcol_receiver_refused_log_records: [receiver]
+
     falco:
       enabled: auto
       metrics: false  # needs metrics.enabled=true in Falco's Helm values
