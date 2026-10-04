@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v4.3.0
       - run: helm lint charts/k8s-health --set clusterName=ci
@@ -102,7 +102,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Package and push the chart as an OCI artifact
         run: |
           version="${GITHUB_REF_NAME#v}"
