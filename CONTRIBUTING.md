@@ -83,6 +83,10 @@ helm install k8s-health charts/k8s-health -n k8s-health --set clusterName=miniku
 4. **Add it to the README's** "What gets checked" table. Put where you tested it under **Tested on**, or `not yet`.
 5. **Test it:** install the component somewhere (minikube or kind is fine). Show the leader detecting it and all checks passing, then a failure after scaling a workload to 0. Paste the logs in the pull request.
 
+## Code of conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Report unacceptable behavior to the address given there.
+
 ## Reporting security problems
 
 Please don't open public issues for those. See [SECURITY.md](SECURITY.md).
