@@ -1,6 +1,6 @@
 # k8s-health
 
-[![ci](https://github.com/jthiatt/k8s-health/actions/workflows/ci.yaml/badge.svg)](https://github.com/jthiatt/k8s-health/actions/workflows/ci.yaml) [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![ci](https://github.com/jthiatt/k8s-health/actions/workflows/ci.yaml/badge.svg)](https://github.com/jthiatt/k8s-health/actions/workflows/ci.yaml) [![agent coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fjthiatt.github.io%2Fk8s-health%2Fbadge-agent.json)](https://jthiatt.github.io/k8s-health/agent/) [![status page coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fjthiatt.github.io%2Fk8s-health%2Fbadge-status-page.json)](https://jthiatt.github.io/k8s-health/status-page/) [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Health checks for any Kubernetes cluster's core services, reported to **Splunk Observability Cloud**, with alerts, a dashboard and an optional status page.
 
@@ -314,6 +314,18 @@ L=$(kubectl -n k8s-health get lease k8s-health-agent -o jsonpath='{.spec.holderI
 | A removed check still shows | Expected for up to about 15 minutes; then the page drops it, as long as the rest of the cluster keeps reporting. |
 
 ---
+
+## Code coverage
+
+The agent and the status page each have a pytest suite, and **each must keep at least 90% line coverage**: CI fails any change that drops below. The Helm chart's templates have their own [helm-unittest](https://github.com/helm-unittest/helm-unittest) suites.
+
+| Report | Where |
+|---|---|
+| Current coverage | The badges at the top of this page, for `main` |
+| Line-by-line HTML reports | [jthiatt.github.io/k8s-health](https://jthiatt.github.io/k8s-health/), rebuilt on every push to `main` |
+| Coverage for a pull request | The **Code coverage** table in the summary of that PR's `ci` run |
+
+To run it locally, see [CONTRIBUTING.md](CONTRIBUTING.md#tests).
 
 ## Development
 

@@ -25,7 +25,7 @@ helm lint charts/k8s-health --set clusterName=dev
 (cd splunk && terraform fmt -check && terraform init -backend=false && terraform validate)
 ```
 
-**Code coverage:** the agent and the status page must each keep **at least 90% line coverage** (`fail_under` in `pyproject.toml`), and CI fails below that. Add or extend a test with every change. The tests use pytest and stub the Kubernetes API, Splunk API and HTTP calls, so they run offline in about a second.
+**Code coverage:** the agent and the status page must each keep **at least 90% line coverage**. Current numbers are in the README badges, and the line-by-line reports are at https://jthiatt.github.io/k8s-health/. The bar is `fail_under` in `pyproject.toml`, and CI fails below that. Add or extend a test with every change. The tests use pytest and stub the Kubernetes API, Splunk API and HTTP calls, so they run offline in about a second.
 
 **Chart tests:** the Helm chart's templates have [helm-unittest](https://github.com/helm-unittest/helm-unittest) suites in `charts/k8s-health/tests/`. Cover any template change there too.
 
