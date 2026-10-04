@@ -1,0 +1,17 @@
+# fluentd for testing the agent's fluentd profile on minikube:
+#   helm upgrade --install fluentd fluent/fluentd -n logging --create-namespace -f dev/minikube/fluentd-values.yaml
+# The chart's default output is Elasticsearch, which minikube doesn't have, so it retries forever and fires
+# "fluentd output failing". Discard instead: the Splunk OTel Collector already ships container logs.
+fileConfigs:
+  04_outputs.conf: |-
+    <label @OUTPUT>
+      <match **>
+        @type null
+        @id out_null
+      </match>
+    </label>
+  # Output retry/error metrics for the agent's fluentd profile
+  05_output_monitor.conf: |-
+    <source>
+      @type prometheus_output_monitor
+    </source>
