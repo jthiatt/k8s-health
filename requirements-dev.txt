@@ -1,0 +1,4 @@
+# Test-only dependencies. The agent itself needs nothing beyond the standard library.
+-r status-page/requirements.txt
+pytest==9.1.1
+coverage==7.16.2

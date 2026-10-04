@@ -17,20 +17,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Agent tests (standard library only)
-        run: python agent/test_agent.py
-      - name: Status page tests
-        working-directory: status-page
+      - run: pip install -r requirements-dev.txt
+      # Each component must keep at least 90% line coverage on its own (fail_under in pyproject.toml).
+      - name: Agent tests and coverage
         run: |
-          pip install -r requirements.txt
-          python test_status_page.py
+          coverage run --data-file=.coverage.agent --source=agent -m pytest agent
+          coverage report --data-file=.coverage.agent
+      - name: Status page tests and coverage
+        run: |
+          coverage run --data-file=.coverage.page --source=status-page -m pytest status-page
+          coverage report --data-file=.coverage.page
 
   chart:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
       - run: helm lint charts/k8s-health --set clusterName=ci
+      - name: Chart unit tests (helm-unittest)
+        run: |
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.2.1 --verify=false
+          helm unittest charts/k8s-health
       - name: Render with every component on
         run: >
           helm template ci charts/k8s-health --set clusterName=ci

@@ -1,0 +1,103 @@
+suite: agent Deployment and PodDisruptionBudget (agent-deployment.yaml)
+templates:
+  - templates/agent-deployment.yaml
+  - templates/agent-configmap.yaml  # the checksum annotation includes it
+set:
+  clusterName: test
+chart:
+  appVersion: 9.9.9
+tests:
+  - it: requires clusterName
+    template: templates/agent-deployment.yaml
+    set:
+      clusterName: ""
+    asserts:
+      - failedTemplate: {errorPattern: "clusterName is required"}
+  - it: uses the image matching the chart's appVersion by default
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    asserts:
+      - equal: {path: "spec.template.spec.containers[0].image", value: "ghcr.io/jthiatt/k8s-health-agent:9.9.9"}
+      - equal: {path: spec.replicas, value: 3}
+  - it: rolls out one pod at a time without surging, so hard anti-affinity upgrades never hang
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    asserts:
+      - equal: {path: spec.strategy.rollingUpdate.maxSurge, value: 0}
+      - equal: {path: spec.strategy.rollingUpdate.maxUnavailable, value: 1}
+  - it: sends to the node-local collector by default
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SPLUNK_OTEL_AGENT, valueFrom: {fieldRef: {fieldPath: status.hostIP}}}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: OTLP_ENDPOINT, value: ""}
+          any: true
+  - it: sends to a gateway when otlpEndpoint is set
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    set:
+      agent.otlpEndpoint: http://gw:4318
+    asserts:
+      - contains: {path: "spec.template.spec.containers[0].env", content: {name: OTLP_ENDPOINT, value: "http://gw:4318"}}
+  - it: passes cluster, interval, metric and lease settings to the agent
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    release: {name: myrel}
+    set:
+      intervalSeconds: 30
+    asserts:
+      - contains: {path: "spec.template.spec.containers[0].env", content: {name: CLUSTER_NAME, value: test}}
+      - contains: {path: "spec.template.spec.containers[0].env", content: {name: INTERVAL_SECONDS, value: "30"}}
+      - contains: {path: "spec.template.spec.containers[0].env", content: {name: METRIC_NAME, value: k8s.health.up}}
+      - contains: {path: "spec.template.spec.containers[0].env", content: {name: LEASE_NAME, value: myrel-k8s-health-agent}}
+  - it: prefers one replica per node by default
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    asserts:
+      - exists: {path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution}
+      - notExists: {path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution}
+  - it: requires one replica per node with antiAffinity hard
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    set:
+      agent.antiAffinity: hard
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution[0].topologyKey
+          value: kubernetes.io/hostname
+  - it: has probes, a read-only root filesystem and no extra capabilities
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    asserts:
+      - equal: {path: "spec.template.spec.containers[0].readinessProbe.httpGet.path", value: /readyz}
+      - equal: {path: "spec.template.spec.containers[0].livenessProbe.httpGet.path", value: /healthz}
+      - equal: {path: "spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem", value: true}
+      - equal: {path: "spec.template.spec.containers[0].securityContext.capabilities.drop", value: [ALL]}
+      - equal: {path: spec.template.spec.securityContext.runAsNonRoot, value: true}
+  - it: adds a PodDisruptionBudget for multiple replicas
+    template: templates/agent-deployment.yaml
+    asserts:
+      - hasDocuments: {count: 2}
+      - isKind: {of: PodDisruptionBudget}
+        documentIndex: 1
+  - it: skips the PodDisruptionBudget for a single replica
+    template: templates/agent-deployment.yaml
+    set:
+      agent.replicas: 1
+    asserts:
+      - hasDocuments: {count: 1}
+  - it: sets nodeSelector, tolerations and priorityClassName when given
+    template: templates/agent-deployment.yaml
+    documentIndex: 0
+    set:
+      agent.nodeSelector: {role: infra}
+      agent.tolerations: [{key: infra, operator: Exists}]
+      agent.priorityClassName: system-cluster-critical
+    asserts:
+      - equal: {path: spec.template.spec.nodeSelector.role, value: infra}
+      - equal: {path: "spec.template.spec.tolerations[0].key", value: infra}
+      - equal: {path: spec.template.spec.priorityClassName, value: system-cluster-critical}

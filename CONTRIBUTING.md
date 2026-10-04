@@ -16,14 +16,18 @@ Thanks for helping. The most useful contributions are usually **add-on profiles*
 ## Tests
 
 ```bash
-python3 agent/test_agent.py                       # no dependencies
-python3 -m venv .venv && .venv/bin/pip install -r status-page/requirements.txt
-(cd status-page && ../.venv/bin/python test_status_page.py)
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/coverage run --source=agent -m pytest agent && .venv/bin/coverage report
+.venv/bin/coverage run --source=status-page -m pytest status-page && .venv/bin/coverage report
+helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.2.1 --verify=false   # once
+helm unittest charts/k8s-health
 helm lint charts/k8s-health --set clusterName=dev
 (cd splunk && terraform fmt -check && terraform init -backend=false && terraform validate)
 ```
 
-The tests are plain `assert` scripts that print `ok`. CI runs all of the above on every pull request.
+**Code coverage:** the agent and the status page must each keep **at least 90% line coverage** (`fail_under` in `pyproject.toml`), and CI fails below that. Add or extend a test with every change. The tests use pytest and stub the Kubernetes API, Splunk API and HTTP calls, so they run offline in about a second.
+
+**Chart tests:** the Helm chart's templates have [helm-unittest](https://github.com/helm-unittest/helm-unittest) suites in `charts/k8s-health/tests/`. Cover any template change there too.
 
 ## The contract between the parts
 
@@ -94,7 +98,7 @@ Please don't open public issues for those. See [SECURITY.md](SECURITY.md).
 ## Pull requests
 
 - Keep the agent standard-library only, so its image stays tiny and has no dependencies to patch.
-- Add or extend a test for any logic change. The tests show the style: a small fake API server, asserts, no frameworks.
+- Add or extend tests with every change, and keep both components at 90%+ coverage. The existing tests show the style: pytest, small fakes for the Kubernetes and Splunk APIs, no network.
 - Update the README in the same pull request when behavior or values change.
 
 ## Releasing

@@ -1,0 +1,63 @@
+suite: agent checks config (agent-configmap.yaml)
+templates:
+  - templates/agent-configmap.yaml
+set:
+  clusterName: test
+tests:
+  - it: renders the core kubernetes service with the API server, DNS and node checks
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"apiserver": "/readyz"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"dns": "kubernetes.default.svc.cluster.local."'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"max_not_ready": 0'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"kubernetes": \{\s*"checks": \[.*?\],\s*"mode": "always"'}
+  - it: uses a custom cluster domain and extra DNS names
+    set:
+      agent.core.clusterDomain: corp.local
+      agent.core.extraDnsNames: [example.com.]
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"dns": "kubernetes.default.svc.corp.local."'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"dns": "example.com."'}
+  - it: leaves out core checks that are turned off, and the whole core service when all are
+    set:
+      agent.core.apiserver: false
+      agent.core.dns: false
+      agent.core.nodes.enabled: false
+    asserts:
+      - notMatchRegex: {path: 'data["checks.json"]', pattern: '"kubernetes":'}
+  - it: reports add-on profiles in auto mode by default
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"argocd": \{\s*"checks": \[.*?\],\s*"mode": "auto"'}
+  - it: "enabled: true means always, enabled: false leaves the profile out"
+    set:
+      agent.profiles.argocd.enabled: true
+      agent.profiles.traefik.enabled: false
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"argocd": \{\s*"checks": \[.*?\],\s*"mode": "always"'}
+      - notMatchRegex: {path: 'data["checks.json"]', pattern: '"traefik":'}
+  - it: includes a profile's metrics scrapes only when its metrics toggle is on
+    asserts:
+      - notMatchRegex: {path: 'data["checks.json"]', pattern: '"port": 9962'}  # cilium metrics off by default
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"port": 8082'}     # argocd metrics on by default
+  - it: turns Cilium metrics on when asked
+    set:
+      agent.profiles.cilium.metrics: true
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"port": 9962'}
+  - it: adds extraServices, defaulting to always
+    set:
+      agent.extraServices:
+        payments: {checks: [{kind: deployment, namespace: pay, name: gw}]}
+        optional: {enabled: auto, checks: [{dns: x.}]}
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"payments": \{\s*"checks": \[.*?\],\s*"mode": "always"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"optional": \{\s*"checks": \[.*?\],\s*"mode": "auto"'}
+  - it: rejects an invalid enabled value
+    set:
+      agent.profiles.argocd.enabled: sometimes
+    asserts:
+      - failedTemplate: {errorPattern: "agent.profiles.argocd.enabled must be auto, true or false"}
+  - it: renders nothing when the agent is disabled
+    set:
+      agent.enabled: false
+    asserts:
+      - hasDocuments: {count: 0}

@@ -1,0 +1,27 @@
+suite: agent RBAC (agent-rbac.yaml)
+templates:
+  - templates/agent-rbac.yaml
+set:
+  clusterName: test
+release:
+  name: k8s-health
+  namespace: monitoring
+tests:
+  - it: grants only read access cluster-wide
+    documentIndex: 1
+    asserts:
+      - isKind: {of: ClusterRole}
+      - contains: {path: rules, content: {apiGroups: [apps], resources: [deployments, statefulsets, daemonsets], verbs: [get]}}
+      - contains: {path: rules, content: {apiGroups: [""], resources: [nodes], verbs: [list]}}
+      - contains: {path: rules, content: {nonResourceURLs: [/readyz, /livez], verbs: [get]}}
+  - it: binds the ClusterRole to the agent's service account in the release namespace
+    documentIndex: 2
+    asserts:
+      - equal: {path: "subjects[0].namespace", value: monitoring}
+      - equal: {path: "subjects[0].name", value: k8s-health-agent}
+  - it: allows Lease updates in the release namespace only, for leader election
+    documentIndex: 3
+    asserts:
+      - isKind: {of: Role}
+      - equal: {path: "rules[0].resources", value: [leases]}
+      - equal: {path: "rules[0].verbs", value: [get, create, update]}

@@ -364,7 +364,9 @@ def health_server(elector, state, interval, port):
         def log_message(self, *a):  # no access log for probes
             pass
 
-    threading.Thread(target=ThreadingHTTPServer(("", port), Handler).serve_forever, daemon=True).start()
+    server = ThreadingHTTPServer(("", port), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def main():
@@ -378,7 +380,7 @@ def main():
         namespace = f.read().strip()
 
     elector = Elector(namespace, os.environ.get("POD_NAME") or socket.gethostname())
-    state = {"cycle_since": 0.0}
+    state = {"cycle_since": 0.0, "next_run": 0.0, "failures": 0}
     absent = set()
     log("info", "starting", cluster=cluster, identity=elector.identity, lease=LEASE, metric=METRIC,
         services={name: spec.get("mode", "always") for name, spec in services.items()})
@@ -393,22 +395,27 @@ def main():
     health_server(elector, state, interval, int(os.environ.get("HEALTH_PORT", "8080")))
     threading.Thread(target=elector.run, daemon=True).start()
 
-    next_run, failures = 0.0, 0
     while True:
-        if elector.is_leader() and time.time() >= next_run:
-            start = time.time()
-            next_run = start + interval
-            state["cycle_since"] = start
-            ok = send(endpoint, collect(services, cluster, absent), start)
-            state["cycle_since"] = 0.0
-            failures = 0 if ok else failures + 1
-            if failures >= SEND_FAILURES_TO_STEP_DOWN:
-                # This node's collector is unreachable: let a replica on another node take over.
-                log("warn", "stepping down: cannot reach this node's collector", failures=failures)
-                elector.release(hold_off=2 * LEASE_SECONDS)
-                failures = 0
+        step(elector, state, services, cluster, endpoint, interval, absent)
         time.sleep(1)
 
 
-if __name__ == "__main__":
+def step(elector, state, services, cluster, endpoint, interval, absent):
+    """One pass of the main loop: if this replica leads and a cycle is due, run the checks and send them."""
+    if not (elector.is_leader() and time.time() >= state["next_run"]):
+        return
+    start = time.time()
+    state["next_run"] = start + interval
+    state["cycle_since"] = start
+    ok = send(endpoint, collect(services, cluster, absent), start)
+    state["cycle_since"] = 0.0
+    state["failures"] = 0 if ok else state["failures"] + 1
+    if state["failures"] >= SEND_FAILURES_TO_STEP_DOWN:
+        # This node's collector is unreachable: let a replica on another node take over.
+        log("warn", "stepping down: cannot reach this node's collector", failures=state["failures"])
+        elector.release(hold_off=2 * LEASE_SECONDS)
+        state["failures"] = 0
+
+
+if __name__ == "__main__":  # pragma: no cover
     main()

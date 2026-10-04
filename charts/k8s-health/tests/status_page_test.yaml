@@ -1,0 +1,75 @@
+suite: status page (status-page.yaml)
+templates:
+  - templates/status-page.yaml
+set:
+  clusterName: test
+tests:
+  - it: is off by default
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: needs a Splunk API token
+    set:
+      statusPage.enabled: true
+      statusPage.splunk.realm: us1
+    asserts:
+      - failedTemplate: {errorPattern: "statusPage needs a Splunk API token"}
+  - it: needs a realm
+    set:
+      statusPage.enabled: true
+      statusPage.splunk.apiToken: t
+    asserts:
+      - failedTemplate: {errorPattern: "statusPage.splunk.realm is required"}
+  - it: creates a Secret from an inline apiToken
+    set:
+      statusPage.enabled: true
+      statusPage.splunk.realm: us1
+      statusPage.splunk.apiToken: secret-token
+    asserts:
+      - isKind: {of: Secret}
+        documentIndex: 0
+      - equal: {path: stringData.token, value: secret-token}
+        documentIndex: 0
+      - hasDocuments: {count: 3}
+  - it: uses an existing Secret without creating one
+    set:
+      statusPage.enabled: true
+      statusPage.splunk.realm: eu0
+      statusPage.splunk.existingSecret: my-secret
+      statusPage.splunk.existingSecretKey: api
+    asserts:
+      - hasDocuments: {count: 2}
+      - isKind: {of: Deployment}
+        documentIndex: 0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: SPLUNK_API_TOKEN, valueFrom: {secretKeyRef: {name: my-secret, key: api}}}
+        documentIndex: 0
+      - contains: {path: "spec.template.spec.containers[0].env", content: {name: SPLUNK_REALM, value: eu0}}
+        documentIndex: 0
+  - it: runs one replica with no service account token and a read-only filesystem
+    set:
+      statusPage.enabled: true
+      statusPage.splunk.realm: us1
+      statusPage.splunk.existingSecret: s
+    documentIndex: 0
+    asserts:
+      - equal: {path: spec.replicas, value: 1}
+      - equal: {path: spec.template.spec.automountServiceAccountToken, value: false}
+      - equal: {path: "spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem", value: true}
+  - it: adds an Ingress when enabled
+    set:
+      statusPage.enabled: true
+      statusPage.splunk.realm: us1
+      statusPage.splunk.existingSecret: s
+      statusPage.ingress.enabled: true
+      statusPage.ingress.className: nginx
+      statusPage.ingress.hosts: [status.example.com]
+      statusPage.ingress.tls: [{hosts: [status.example.com], secretName: tls}]
+      statusPage.ingress.annotations: {a: b}
+    documentIndex: 2
+    asserts:
+      - isKind: {of: Ingress}
+      - equal: {path: spec.ingressClassName, value: nginx}
+      - equal: {path: "spec.rules[0].host", value: status.example.com}
+      - equal: {path: "spec.tls[0].secretName", value: tls}
+      - equal: {path: metadata.annotations.a, value: b}

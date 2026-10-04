@@ -1,0 +1,12 @@
+# Tooling config only; the agent and status page are plain scripts, not installable packages.
+
+[tool.pytest.ini_options]
+addopts = "-q"
+
+[tool.coverage.run]
+omit = ["*/test_*.py"]
+
+[tool.coverage.report]
+show_missing = true
+# Each component is held to this separately in CI (see .github/workflows/ci.yaml).
+fail_under = 90

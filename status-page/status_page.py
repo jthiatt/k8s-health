@@ -215,5 +215,5 @@ def index():
                            days=HISTORY_DAYS, incident_days=INCIDENT_DAYS, title=PAGE_TITLE, metric=METRIC)
 
 
-if __name__ == "__main__":  # local dev; the container runs gunicorn
+if __name__ == "__main__":  # pragma: no cover  (local dev; the container runs gunicorn)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "8080")))
