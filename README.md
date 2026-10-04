@@ -8,6 +8,14 @@ Health checks for any Kubernetes cluster's core services, reported to **Splunk O
 - **Alerts and dashboard** (`splunk/`, Terraform): a **dead man's switch** that tells you when a cluster's agent goes silent, rules for services that are down, and a cluster-health dashboard.
 - **Status page** (`status-page/`, optional): one page for all clusters, showing each service's current state, 30 days of daily uptime and recent incidents. It reads the Splunk API, so it can run anywhere.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/status-page-dark.png">
+    <img alt="The k8s-health status page: overall status, each service's current state with 30 days of daily uptime, and a timeline of recent incidents" src="docs/images/status-page-light.png" width="760">
+  </picture>
+  <br><em>The status page on a test cluster. The red days are deliberate outage tests.</em>
+</p>
+
 ```
  each cluster                                                 Splunk Observability Cloud       anywhere
 ┌───────────────────────────┐ OTLP  ┌───────────────────────┐ ┌──────────────────────────┐ API ┌──────────────┐
