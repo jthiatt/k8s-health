@@ -170,6 +170,17 @@ resource "signalfx_time_chart" "fluentd_retries" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "arc_runners" {
+  name         = "ARC runners: busy vs idle"
+  description  = "Per runner scale set, from the ARC listeners (needs ARC metrics on)"
+  program_text = <<-EOF
+    data('gha_busy_runners', filter=filter('service', 'arc')).sum(by=['cluster', 'name']).publish('busy')
+    data('gha_idle_runners', filter=filter('service', 'arc')).sum(by=['cluster', 'name']).publish('idle')
+  EOF
+  plot_type    = "AreaChart"
+  stacked      = true
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -310,6 +321,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.fluentd_retries.id
     row      = 7
     column   = 8
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.arc_runners.id
+    row      = 8
+    column   = 0
     width    = 4
     height   = 1
   }

@@ -27,6 +27,8 @@ resource "signalfx_detector" "core_services" {
     detect(when(kyverno_errors > 0, lasting='10m')).publish('Kyverno policy errors')
     fluentd_retries = data('fluentd_output_status_retry_count', filter=filter('service', 'fluentd')).max(by=['cluster', 'plugin_id'])
     detect(when(fluentd_retries > 0, lasting='10m')).publish('fluentd output failing')
+    arc_failed = data('gha_controller_failed_ephemeral_runners', filter=filter('service', 'arc')).max(by=['cluster', 'name', 'namespace'])
+    detect(when(arc_failed > 0, lasting='10m')).publish('ARC runners failing')
   EOF
 
   rule {
@@ -81,6 +83,11 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "fluentd output failing"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "ARC runners failing"
     severity     = "Warning"
   }
 }

@@ -96,12 +96,15 @@ def scope(c):
 
 
 def metrics_targets(t):
-    """{"url": ...} or {"selector", "port", optional "namespace"} (scrapes every running pod by IP) -> [(url, dims)]."""
+    """{"url": ...} or {"selector", "port", optional "namespace"} (scrapes every running pod by IP) -> [(url, dims)].
+    "optional": true means pods that may legitimately not exist yet (e.g. ARC listeners before any scale set)."""
     if "url" in t:
         return [(t["url"], {})]
     q = urllib.parse.urlencode({"labelSelector": t["selector"], "fieldSelector": "status.phase=Running"})
     pods = [p for p in k8s(f"/api/v1{scope(t)}/pods?{q}")["items"] if p["status"].get("podIP")]
     if not pods:
+        if t.get("optional"):
+            return []
         raise RuntimeError("no running pods match selector")
     return [(f"http://{bracket(p['status']['podIP'])}:{t['port']}{t.get('path', '/metrics')}", {"pod": p["metadata"]["name"]})
             for p in pods]

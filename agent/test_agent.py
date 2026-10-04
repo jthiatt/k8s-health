@@ -162,6 +162,10 @@ def test_metrics_targets_by_selector(monkeypatch):
     monkeypatch.setattr(agent, "k8s", lambda path, **_: {"items": []})
     with pytest.raises(RuntimeError, match="no running pods"):
         agent.metrics_targets({"namespace": "ns", "selector": "app=x", "port": 9090})
+    assert agent.metrics_targets({"selector": "app=x", "port": 9090, "optional": True}) == []  # may not exist yet
+    out = []
+    scrape({"metrics": {"selector": "app=x", "port": 9090, "optional": True}, "forward": ["m"], "min": {"m": 1}}, out)
+    assert out == []  # nothing to scrape: passes, and min's "missing" doesn't apply to targets that aren't there
 
 
 # --- workload readiness, nodes, simple checks --------------------------------------------------

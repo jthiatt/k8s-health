@@ -56,6 +56,12 @@ tests:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"fluentd": \{\s*"checks": \[\s*\{\s*"kind": "daemonset",\s*"selector": "app.kubernetes.io/name=fluentd"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '"port": 24231'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"fluentd_input_status_num_records_total": \[\s*\]'}
+  - it: includes the ARC profile, with listener scrapes optional until scale sets exist
+    set:
+      agent.profiles.arc.metrics: true
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"selector": "app.kubernetes.io/name=gha-rs-controller"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"optional": true,\s*"port": 8080,\s*"selector": "app.kubernetes.io/component=runner-scale-set-listener"'}
   - it: turns Cilium metrics on when asked
     set:
       agent.profiles.cilium.metrics: true

@@ -214,6 +214,24 @@ agent:
             - fluentd_output_status_retry_count
             - fluentd_output_status_num_errors
 
+    arc:  # GitHub Actions Runner Controller (gha-runner-scale-set-controller)
+      enabled: auto
+      metrics: false  # needs the controller chart's metrics.controllerManagerAddr / listenerAddr values
+      # The controller's Deployment name depends on its release name, and its namespace varies (docs use
+      # arc-systems), so find it by its chart label.
+      checks:
+        - {kind: deployment, selector: app.kubernetes.io/name=gha-rs-controller}
+      metricsChecks:
+        - metrics: {selector: app.kubernetes.io/name=gha-rs-controller, port: 8080}
+          aggregate: {controller_runtime_reconcile_errors_total: [controller]}
+          # Per runner scale set; exported once scale sets exist.
+          forward: [gha_controller_pending_ephemeral_runners, gha_controller_running_ephemeral_runners,
+                    gha_controller_failed_ephemeral_runners, gha_controller_running_listeners]
+        # One listener pod per runner scale set, in the controller's namespace. None until scale sets exist.
+        - metrics: {selector: app.kubernetes.io/component=runner-scale-set-listener, port: 8080, optional: true}
+          forward: [gha_registered_runners, gha_busy_runners, gha_idle_runners, gha_desired_runners,
+                    gha_assigned_jobs, gha_running_jobs]
+
   # -- Your own services, same shape as a profile: {name: {enabled: true|auto, checks: [...]}}
   extraServices: {}
 
