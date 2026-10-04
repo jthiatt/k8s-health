@@ -66,6 +66,10 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"prometheus": \{\s*"checks": \[\s*\{\s*"kind": "deployment",\s*"selector": "app.kubernetes.io/component=prometheus-operator"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"min": \{\s*"alertmanager_config_last_reload_successful": 1'}
+  - it: includes the Gatekeeper profile, requiring a recent audit run
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"gatekeeper": \{\s*"checks": \[.*?"name": "gatekeeper-audit".*?\],\s*"mode": "auto"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"max_age": \{\s*"gatekeeper_audit_last_run_end_time": 900'}
   - it: includes the Istio profile, covering istiod and gateways in any namespace
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"istio": \{\s*"checks": \[\s*\{\s*"kind": "deployment",\s*"selector": "app.kubernetes.io/part-of=istio"'}

@@ -50,6 +50,8 @@ resource "signalfx_detector" "core_services" {
     detect(when(istio_root < 30 * 86400, lasting='1h')).publish('Istio root certificate expiring')
     linkerd_issuer = data('issuer_cert_ttl_seconds', filter=filter('service', 'linkerd')).min(by=['cluster'])
     detect(when(linkerd_issuer < 7 * 86400, lasting='1h')).publish('Linkerd issuer certificate expiring')
+    gk_errors = data('gatekeeper_constraint*', filter=filter('service', 'gatekeeper') and filter('status', 'error')).sum(by=['cluster'])
+    detect(when(gk_errors > 0, lasting='10m')).publish('Gatekeeper policy errors')
   EOF
 
   rule {
@@ -155,6 +157,11 @@ resource "signalfx_detector" "core_services" {
   rule {
     detect_label = "Linkerd issuer certificate expiring"
     severity     = "Critical"
+  }
+
+  rule {
+    detect_label = "Gatekeeper policy errors"
+    severity     = "Warning"
   }
 }
 

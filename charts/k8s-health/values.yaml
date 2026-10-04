@@ -179,6 +179,22 @@ agent:
           min: {alertmanager_config_last_reload_successful: 1}
 
     # istiod and every gateway installed from Istio's charts (labeled part-of=istio), in any namespace.
+    gatekeeper:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: gatekeeper-system, name: gatekeeper-controller-manager}
+        - {kind: deployment, namespace: gatekeeper-system, name: gatekeeper-audit}
+      metricsChecks:
+        - metrics: {namespace: gatekeeper-system, selector: control-plane=audit-controller, port: 8888}
+          forward:
+            - gatekeeper_violations                            # by enforcement_action
+            - 'gatekeeper_constraints{status="error"}'
+            - 'gatekeeper_constraint_templates{status="error"}'
+          max_age: {gatekeeper_audit_last_run_end_time: 900}  # audit runs every 60 s by default
+        - metrics: {namespace: gatekeeper-system, selector: control-plane=controller-manager, port: 8888}
+          aggregate: {gatekeeper_validation_request_count_total: [admission_status]}
+
     istio:
       enabled: auto
       metrics: true

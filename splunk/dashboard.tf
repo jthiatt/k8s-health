@@ -243,6 +243,13 @@ resource "signalfx_time_chart" "mesh_certs" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "gatekeeper_violations" {
+  name         = "Gatekeeper audit violations"
+  description  = "By enforcement action (deny, dryrun, warn), from the last audit"
+  program_text = "data('gatekeeper_violations', filter=filter('service', 'gatekeeper')).max(by=['cluster', 'enforcement_action']).publish('violations')"
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -439,6 +446,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.mesh_certs.id
     row      = 10
     column   = 4
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.gatekeeper_violations.id
+    row      = 10
+    column   = 8
     width    = 4
     height   = 1
   }
