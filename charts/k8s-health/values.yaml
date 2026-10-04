@@ -179,6 +179,19 @@ agent:
           min: {alertmanager_config_last_reload_successful: 1}
 
     # istiod and every gateway installed from Istio's charts (labeled part-of=istio), in any namespace.
+    falco:
+      enabled: auto
+      metrics: false  # needs metrics.enabled=true in Falco's Helm values
+      checks:
+        - {kind: daemonset, selector: app.kubernetes.io/name=falco}
+      metricsChecks:
+        - metrics: {selector: app.kubernetes.io/name=falco, port: 8765}
+          forward:
+            - falcosecurity_scap_n_drops_total                    # kernel events dropped (syscall source)
+            - falcosecurity_scap_n_evts_total
+            - falcosecurity_falco_outputs_queue_num_drops_total   # alerts dropped before output
+          aggregate: {falcosecurity_falco_rules_matches_total: [priority]}  # 0 = emergency ... 7 = debug
+
     gatekeeper:
       enabled: auto
       metrics: true

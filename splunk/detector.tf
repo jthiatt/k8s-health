@@ -52,6 +52,8 @@ resource "signalfx_detector" "core_services" {
     detect(when(linkerd_issuer < 7 * 86400, lasting='1h')).publish('Linkerd issuer certificate expiring')
     gk_errors = data('gatekeeper_constraint*', filter=filter('service', 'gatekeeper') and filter('status', 'error')).sum(by=['cluster'])
     detect(when(gk_errors > 0, lasting='10m')).publish('Gatekeeper policy errors')
+    falco_drops = data('falcosecurity_*_drops_total', filter=filter('service', 'falco'), rollup='delta').sum(by=['cluster'])
+    detect(when(falco_drops > 0, lasting='10m')).publish('Falco dropping events')
   EOF
 
   rule {
@@ -161,6 +163,11 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "Gatekeeper policy errors"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "Falco dropping events"
     severity     = "Warning"
   }
 }

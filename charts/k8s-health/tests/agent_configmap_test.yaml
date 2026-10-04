@@ -66,6 +66,14 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"prometheus": \{\s*"checks": \[\s*\{\s*"kind": "deployment",\s*"selector": "app.kubernetes.io/component=prometheus-operator"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"min": \{\s*"alertmanager_config_last_reload_successful": 1'}
+  - it: includes the Falco profile, with metrics off by default
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"falco": \{\s*"checks": \[\s*\{\s*"kind": "daemonset",\s*"selector": "app.kubernetes.io/name=falco"\s*\}\s*\]'}
+  - it: aggregates Falco rule matches by priority when metrics are on
+    set:
+      agent.profiles.falco.metrics: true
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"falcosecurity_falco_rules_matches_total": \[\s*"priority"\s*\]'}
   - it: includes the Gatekeeper profile, requiring a recent audit run
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"gatekeeper": \{\s*"checks": \[.*?"name": "gatekeeper-audit".*?\],\s*"mode": "auto"'}

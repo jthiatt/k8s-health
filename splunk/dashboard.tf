@@ -250,6 +250,16 @@ resource "signalfx_time_chart" "gatekeeper_violations" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "falco" {
+  name         = "Falco detections by priority, and dropped events"
+  description  = "Priority 0 = emergency, 2 = critical, 4 = warning (needs Falco metrics on)"
+  program_text = <<-EOF
+    data('falcosecurity_falco_rules_matches_total', filter=filter('service', 'falco'), rollup='delta').sum(by=['cluster', 'priority']).publish('detections')
+    data('falcosecurity_*_drops_total', filter=filter('service', 'falco'), rollup='delta').sum(by=['cluster']).publish('dropped')
+  EOF
+  plot_type    = "ColumnChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -453,6 +463,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.gatekeeper_violations.id
     row      = 10
     column   = 8
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.falco.id
+    row      = 11
+    column   = 0
     width    = 4
     height   = 1
   }
