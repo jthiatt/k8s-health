@@ -45,6 +45,8 @@ Health checks for any Kubernetes cluster's core services, reported to **Splunk O
 
 ## Quick start
 
+> **Trying it locally?** With [Claude Code](https://claude.com/claude-code), run `/minikube-setup` in this repo. It walks you through minikube, the Splunk tokens, the Splunk OTel Collector, the agent, the status page and the Terraform alerts, checking each step as it goes. The steps are in [`.claude/skills/minikube-setup/SKILL.md`](.claude/skills/minikube-setup/SKILL.md).
+
 ### 1. Check the collector
 
 From any pod, using one of your nodes' IPs (`kubectl get nodes -o wide`):
