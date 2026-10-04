@@ -215,6 +215,15 @@ resource "signalfx_time_chart" "cert_days_left" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "prometheus_failures" {
+  name         = "Prometheus rule failures and Alertmanager notification failures /s"
+  program_text = <<-EOF
+    data('prometheus_rule_evaluation_failures_total', filter=filter('service', 'prometheus'), rollup='rate').sum(by=['cluster']).publish('rule failures')
+    data('alertmanager_notifications_failed_total', filter=filter('service', 'prometheus'), rollup='rate').sum(by=['cluster', 'integration']).publish('notification failures')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -390,6 +399,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.cert_days_left.id
     row      = 9
     column   = 4
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.prometheus_failures.id
+    row      = 9
+    column   = 8
     width    = 4
     height   = 1
   }

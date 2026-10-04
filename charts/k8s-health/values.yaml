@@ -154,6 +154,30 @@ agent:
             - externalsecret_sync_calls_total
           max: {'clustersecretstore_status_condition{condition="Ready",status="False"}': 0}
 
+    # kube-prometheus-stack. Its resource names include the Helm release name, so workloads are found by label in
+    # any namespace. If you turned off a part (e.g. alertmanager.enabled=false), drop its check via checks.
+    prometheus:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, selector: app.kubernetes.io/component=prometheus-operator}
+        - {kind: statefulset, selector: 'app.kubernetes.io/name=prometheus,app.kubernetes.io/managed-by=prometheus-operator'}
+        - {kind: statefulset, selector: 'app.kubernetes.io/name=alertmanager,app.kubernetes.io/managed-by=prometheus-operator'}
+        - {kind: deployment, selector: app.kubernetes.io/name=kube-state-metrics}
+        - {kind: daemonset, selector: app.kubernetes.io/name=prometheus-node-exporter}
+      metricsChecks:
+        - metrics: {selector: 'app.kubernetes.io/name=prometheus,app.kubernetes.io/managed-by=prometheus-operator', port: 9090}
+          forward: [prometheus_tsdb_head_series, prometheus_notifications_alertmanagers_discovered]
+          aggregate:  # per rule group / per Alertmanager: one total each
+            prometheus_rule_evaluation_failures_total: []
+            prometheus_notifications_errors_total: []
+            prometheus_notifications_dropped_total: []
+          min: {prometheus_config_last_reload_successful: 1}
+        - metrics: {selector: 'app.kubernetes.io/name=alertmanager,app.kubernetes.io/managed-by=prometheus-operator', port: 9093}
+          forward: ['alertmanager_alerts{state="active"}']
+          aggregate: {alertmanager_notifications_failed_total: [integration]}
+          min: {alertmanager_config_last_reload_successful: 1}
+
     metrics-server:
       enabled: auto
       checks:

@@ -40,6 +40,10 @@ resource "signalfx_detector" "core_services" {
     cert_expiry = data('certmanager_certificate_expiration_timestamp_seconds', filter=filter('service', 'cert-manager')).above(0).min(by=['cluster'])
     cert_clock = data('certmanager_clock_time_seconds_gauge', filter=filter('service', 'cert-manager')).max(by=['cluster'])
     detect(when(cert_expiry - cert_clock < 14 * 86400, lasting='1h')).publish('Certificate expiring')
+    prom_rule_failures = data('prometheus_rule_evaluation_failures_total', filter=filter('service', 'prometheus'), rollup='delta').sum(by=['cluster'])
+    detect(when(prom_rule_failures > 0, lasting='10m')).publish('Prometheus rule evaluation failing')
+    am_failed = data('alertmanager_notifications_failed_total', filter=filter('service', 'prometheus'), rollup='delta').sum(by=['cluster', 'integration'])
+    detect(when(am_failed > 0, lasting='10m')).publish('Alertmanager notifications failing')
   EOF
 
   rule {
@@ -119,6 +123,16 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "Certificate expiring"
+    severity     = "Major"
+  }
+
+  rule {
+    detect_label = "Prometheus rule evaluation failing"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "Alertmanager notifications failing"
     severity     = "Major"
   }
 }
