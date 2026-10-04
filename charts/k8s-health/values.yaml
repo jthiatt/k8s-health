@@ -62,6 +62,25 @@ agent:
   #            doesn't expose metrics by default.
   # Check syntax is documented in the README ("Check reference"). Override any field with your own values.
   profiles:
+    # CloudNativePG operator, and every Postgres instance it runs (none until a Cluster exists).
+    cloudnative-pg:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, selector: app.kubernetes.io/name=cloudnative-pg}
+      metricsChecks:
+        - metrics: {selector: cnpg.io/podRole=instance, port: 9187, optional: true}
+          forward:
+            - cnpg_pg_replication_lag                             # seconds behind the primary
+            - cnpg_pg_replication_streaming_replicas
+            - cnpg_pg_replication_in_recovery                     # 1 on replicas
+            - 'cnpg_collector_pg_wal_archive_status{value="ready"}'  # WAL files waiting to be archived
+            - cnpg_collector_last_failed_backup_timestamp
+            - cnpg_collector_last_available_backup_timestamp
+            - cnpg_collector_fencing_on
+          min: {cnpg_collector_up: 1}
+          max: {cnpg_last_error: 0}  # the exporter couldn't query Postgres (also catches fenced instances, where up stays 1)
+
     coredns:
       enabled: auto
       metrics: true

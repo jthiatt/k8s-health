@@ -74,6 +74,11 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '"selector": "app.kubernetes.io/name=opentelemetry-operator,app.kubernetes.io/component=controller-manager"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"optional": true,\s*"port": 8888,\s*"selector": "app.kubernetes.io/managed-by=opentelemetry-operator'}
+  - it: includes the CloudNativePG profile, requiring Postgres up on every instance
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"cloudnative-pg": \{\s*"checks": \[\s*\{\s*"kind": "deployment",\s*"selector": "app.kubernetes.io/name=cloudnative-pg"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"min": \{\s*"cnpg_collector_up": 1'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"max": \{\s*"cnpg_last_error": 0'}
   - it: includes the Falco profile, with metrics off by default
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"falco": \{\s*"checks": \[\s*\{\s*"kind": "daemonset",\s*"selector": "app.kubernetes.io/name=falco"\s*\}\s*\]'}

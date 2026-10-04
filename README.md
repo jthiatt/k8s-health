@@ -135,6 +135,7 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 
 | Profile | Workloads | Metrics scraped (`metrics`) | Fails when (besides workloads not ready) | Tested on |
 |---|---|---|---|---|
+| cloudnative-pg | the operator, labeled `app.kubernetes.io/name=cloudnative-pg`, **in any namespace**; plus every Postgres instance it runs (scraped, optional until a Cluster exists) | instances :9187, on: replication lag, WAL archive backlog, backup times, fencing | Postgres is down or can't be queried on an instance (including a fenced instance) | minikube (chart 0.29, operator 1.30, Postgres 18) |
 | coredns | `kube-system/coredns` | :9153, on by default | any CoreDNS panic | minikube |
 | kube-dns | `kube-system/kube-dns` (GKE) | none | none | not yet |
 | kube-proxy | `kube-system/kube-proxy` DaemonSet | none | none | minikube |
@@ -272,7 +273,9 @@ These rules have no recipients by default, so they only raise incidents, which t
 | fluentd output failing | Warning | An output has been retrying for 10 minutes (needs fluentd's output monitor) |
 | Envoy proxies rejecting config | Major | An Envoy Gateway proxy rejected listener or cluster config in the last 15 minutes |
 | OpenTelemetry collector export failing | Major | A managed collector's exporter fails to send every minute for 10 minutes |
+| Postgres WAL archiving stuck | Major | More than 10 WAL files have been waiting to be archived for 15 minutes (CloudNativePG) |
 | Envoy Gateway 5xx rate high | Major | More than 5% of a Gateway listener's responses are 5xx for 5 minutes |
+| Postgres replication lag high | Warning | A CloudNativePG replica has been over 5 minutes behind for 5 minutes |
 | Falco dropping events | Warning | Falco drops kernel events or alerts every minute for 10 minutes (needs Falco metrics on) |
 | Gatekeeper policy errors | Warning | A ConstraintTemplate or Constraint has been in error for 10 minutes, so it isn't enforced |
 | Kyverno policy errors | Warning | Kyverno's policy engine returns `error` results every minute for 10 minutes |

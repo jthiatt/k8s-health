@@ -281,6 +281,15 @@ resource "signalfx_time_chart" "otel_collectors" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "postgres" {
+  name         = "Postgres (CloudNativePG): replication lag and WAL waiting to archive"
+  program_text = <<-EOF
+    data('cnpg_pg_replication_lag', filter=filter('service', 'cloudnative-pg')).max(by=['cluster', 'pod']).publish('lag s')
+    data('cnpg_collector_pg_wal_archive_status', filter=filter('service', 'cloudnative-pg') and filter('value', 'ready')).max(by=['cluster', 'pod']).publish('WAL ready')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -505,6 +514,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.otel_collectors.id
     row      = 11
     column   = 8
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.postgres.id
+    row      = 12
+    column   = 0
     width    = 4
     height   = 1
   }

@@ -62,6 +62,10 @@ resource "signalfx_detector" "core_services" {
     detect(when(eg_5xx / eg_all > 0.05, lasting='5m')).publish('Envoy Gateway 5xx rate high')
     otel_failed = data('otelcol_exporter_send_failed_*', filter=filter('service', 'opentelemetry-operator'), rollup='delta').sum(by=['cluster', 'pod', 'exporter'])
     detect(when(otel_failed > 0, lasting='10m')).publish('OpenTelemetry collector export failing')
+    pg_lag = data('cnpg_pg_replication_lag', filter=filter('service', 'cloudnative-pg')).max(by=['cluster', 'pod'])
+    detect(when(pg_lag > 300, lasting='5m')).publish('Postgres replication lag high')
+    pg_wal_ready = data('cnpg_collector_pg_wal_archive_status', filter=filter('service', 'cloudnative-pg') and filter('value', 'ready')).max(by=['cluster', 'pod'])
+    detect(when(pg_wal_ready > 10, lasting='15m')).publish('Postgres WAL archiving stuck')
   EOF
 
   rule {
@@ -191,6 +195,16 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "OpenTelemetry collector export failing"
+    severity     = "Major"
+  }
+
+  rule {
+    detect_label = "Postgres replication lag high"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "Postgres WAL archiving stuck"
     severity     = "Major"
   }
 }
