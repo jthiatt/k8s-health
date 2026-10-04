@@ -155,6 +155,14 @@ resource "signalfx_time_chart" "keda_errors" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "kyverno_results" {
+  name         = "Kyverno policy results/s"
+  description  = "pass, fail, warn, error and skip, summed across policies"
+  program_text = "data('kyverno_policy_results_total', filter=filter('service', 'kyverno'), rollup='rate').sum(by=['cluster', 'rule_result']).publish('results/s')"
+  plot_type    = "AreaChart"
+  stacked      = true
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -281,6 +289,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.keda_errors.id
     row      = 7
     column   = 0
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.kyverno_results.id
+    row      = 7
+    column   = 4
     width    = 4
     height   = 1
   }

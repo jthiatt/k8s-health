@@ -143,6 +143,7 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
 | external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | minikube (chart 1.23) |
 | karpenter | `kube-system/karpenter` | :8080, on | pod can't be scraped | not yet |
+| kyverno | admission, background, cleanup and reports controllers in `kyverno` | :8000 on each, on; policy and admission metrics **aggregated** by result | pod can't be scraped | minikube (Kyverno 1.19) |
 | keda | operator, metrics-apiserver, admission-webhooks in `keda` | operator :8080, **off by default** | pod can't be scraped | minikube (KEDA 2.21, metrics on) |
 
 "Not yet" means the profile follows the component's upstream Helm chart defaults (names, namespaces, labels, ports), but nobody has run it against a live install. Check it against your cluster, and please send a PR with fixes or a "tested on" entry.
@@ -192,6 +193,7 @@ agent:
         # Scrape Prometheus metrics: every running pod matching the selector, by IP (or {url: http://host:port/metrics}).
         - metrics: {namespace: payments, selector: app=gateway, port: 9090}
           forward: [http_requests_total]               # also send these series to Splunk
+          aggregate: {http_requests_total: [code]}      # or: send sums, grouped by just these labels
           max: {gateway_queue_depth: 500}              # fail above
           min: {gateway_workers: 1}                    # fail below (or if missing)
           max_age: {gateway_last_success_timestamp_seconds: 600}  # fail if older (or missing)
@@ -205,7 +207,8 @@ How metrics checks behave:
   - **Name and dimensions:** each keeps its name, with dimensions `cluster`, `service`, `pod` and its own labels.
   - **Counter or gauge:** series the endpoint declares as counters (by its `# TYPE` lines, including histogram buckets, sums and counts) are sent as cumulative counters; everything else as gauges.
   - **NaN and Inf:** dropped.
-- **Watch the number of series:** forwarded series multiply by pods and label values, so only forward what you chart or alert on.
+- **Aggregating:** `aggregate` sends the **sum** of the matching series, grouped by only the labels you list (`[]` = one total), still per pod. Use it for metrics labeled per resource, policy or namespace, which would otherwise create thousands of series. The Kyverno profile uses it for its admission and policy metrics. Use either `forward` or `aggregate` for a given metric, not both.
+- **Watch the number of series:** forwarded series multiply by pods and label values, so only forward what you chart or alert on, and aggregate the rest.
 
 Two more check types, used by the core service: `{apiserver: /readyz}` and `{nodes: {max_not_ready: 0, ignore_younger_than_seconds: 300}}`.
 
@@ -243,6 +246,7 @@ These rules have no recipients by default, so they only raise incidents, which t
 | ExternalSecret not syncing | Warning | An ExternalSecret has been not Ready for 15 minutes |
 | Karpenter nodepool near limit | Warning | A nodepool has been above 90% of a limit for 10 minutes |
 | KEDA scaling errors | Warning | A ScaledObject has errors every minute for 10 minutes (needs KEDA metrics on) |
+| Kyverno policy errors | Warning | Kyverno's policy engine returns `error` results every minute for 10 minutes |
 
 Rules for add-ons you don't run never fire.
 

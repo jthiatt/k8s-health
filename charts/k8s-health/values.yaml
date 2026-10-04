@@ -174,6 +174,28 @@ agent:
           # Names as exported by KEDA 2.21. Per-ScaledObject series, so cardinality grows with ScaledObjects.
           forward: [keda_scaled_object_errors_total, keda_scaler_detail_errors_total, keda_scaled_object_paused, keda_internal_scale_loop_latency_seconds]
 
+    kyverno:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: kyverno, name: kyverno-admission-controller}
+        - {kind: deployment, namespace: kyverno, name: kyverno-background-controller}
+        - {kind: deployment, namespace: kyverno, name: kyverno-cleanup-controller}
+        - {kind: deployment, namespace: kyverno, name: kyverno-reports-controller}
+      metricsChecks:
+        - metrics:
+            namespace: kyverno
+            selector: "app.kubernetes.io/component in (admission-controller,background-controller,cleanup-controller,reports-controller)"
+            port: 8000
+          # Kyverno labels these per policy, rule, resource and namespace (dozens of series per policy), so sum
+          # them down to the labels that matter for health. Names as exported by Kyverno 1.19.
+          aggregate:
+            kyverno_admission_requests_total: [request_allowed, request_webhook]
+            kyverno_policy_results_total: [rule_result]
+            kyverno_admission_review_duration_seconds_bucket: [le]
+            kyverno_admission_review_duration_seconds_count: []
+            kyverno_admission_review_duration_seconds_sum: []
+
   # -- Your own services, same shape as a profile: {name: {enabled: true|auto, checks: [...]}}
   extraServices: {}
 

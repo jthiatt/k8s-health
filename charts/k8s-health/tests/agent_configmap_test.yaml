@@ -47,6 +47,10 @@ tests:
       agent.profiles.keda.metrics: true
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: 'keda_scaled_object_errors_total'}
+  - it: includes the Kyverno profile, aggregating its per-policy metrics
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"kyverno": \{\s*"checks": \[.*?"name": "kyverno-admission-controller".*?\],\s*"mode": "auto"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"aggregate": \{.*?"kyverno_policy_results_total": \[\s*"rule_result"\s*\]'}
   - it: turns Cilium metrics on when asked
     set:
       agent.profiles.cilium.metrics: true

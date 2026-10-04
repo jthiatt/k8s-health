@@ -110,6 +110,41 @@ def test_scrape_forwarding_and_thresholds(prom_url):
     assert not fails(prom_url, {"max_age": {"external_dns_controller_last_sync_timestamp_seconds": 10**10}})
 
 
+AGG_PROM = """# TYPE reqs_total counter
+reqs_total{allowed="true",ns="a",kind="Pod"} 5
+reqs_total{allowed="true",ns="b",kind="Pod"} 7
+reqs_total{allowed="false",ns="a",kind="Pod"} 2
+reqs_total{ns="c"} 1
+reqs_total{allowed="true",ns="d"} NaN
+# TYPE lat_seconds histogram
+lat_seconds_bucket{le="0.1",ns="a"} 3
+lat_seconds_bucket{le="0.1",ns="b"} 4
+lat_seconds_bucket{le="+Inf",ns="a"} 9
+"""
+
+
+def test_scrape_aggregate_sums_by_kept_labels(monkeypatch):
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", lambda url, timeout: Resp(AGG_PROM.encode()))
+    out = []
+    scrape({"metrics": {"url": "http://x/metrics"},
+            "aggregate": {"reqs_total": ["allowed"], 'lat_seconds_bucket{ns="a"}': ["le"], "lat_seconds_bucket": []}}, out)
+    got = {(n, tuple(sorted(d.items())), t): v for n, v, d, t in out}
+    assert got[("reqs_total", (("allowed", "true"),), "cumulative_counter")] == 12  # ns and kind dropped, NaN skipped
+    assert got[("reqs_total", (("allowed", "false"),), "cumulative_counter")] == 2
+    assert got[("reqs_total", (("allowed", ""),), "cumulative_counter")] == 1  # label missing on the series
+    assert got[("lat_seconds_bucket", (("le", "0.1"),), "cumulative_counter")] == 3  # label-filtered selector: ns="a" only
+    assert got[("lat_seconds_bucket", (("le", "+Inf"),), "cumulative_counter")] == 9
+    assert got[("lat_seconds_bucket", (), "cumulative_counter")] == 16  # no labels kept: one total
+    assert len(out) == 6
+
+
 def test_metrics_targets_by_selector(monkeypatch):
     seen = []
 

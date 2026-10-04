@@ -104,23 +104,29 @@ def metrics_targets(t):
 
 def scrape(c, out):
     """Appends `forward`ed series to out as (name, value, dims, splunk_type); raises if a threshold is breached.
-    Thresholds: max / min / max_age (seconds since a unix-timestamp gauge). min and max_age also fail
-    when no series matches, since they assert something must be present; max passes on absence."""
+    `aggregate` ({selector: [labels]}) instead sums matching series by just those labels (per pod), for
+    metrics whose own labels would create too many series. Thresholds: max / min / max_age (seconds since
+    a unix-timestamp gauge). min and max_age also fail when no series matches; max passes on absence."""
     rules = [(op, sel, limit) for op in ("max", "min", "max_age") for sel, limit in c.get(op, {}).items()]
     bad = []
     for url, dims in metrics_targets(c["metrics"]):
         where = dims.get("pod", url)
         with urllib.request.urlopen(url, timeout=5) as r:
             series = parse_prom(r.read().decode())
-        now, seen = time.time(), set()
+        now, seen, sums = time.time(), set(), {}
         for name, labels, value, typ in series:
             if any(matches(sel, name, labels) for sel in c.get("forward", [])) and math.isfinite(value):  # NaN isn't JSON
                 out.append((name, value, {**labels, **dims}, typ))
+            for sel, keep in c.get("aggregate", {}).items():
+                if matches(sel, name, labels) and math.isfinite(value):
+                    key = (name, tuple((k, labels.get(k, "")) for k in keep), typ)
+                    sums[key] = sums.get(key, 0.0) + value
             for op, sel, limit in rules:
                 if matches(sel, name, labels):
                     seen.add(sel)
                     if breach(op, value, limit, now):
                         bad.append(f"{where} {name}{labels}={value} breaches {op} {limit}")
+        out += [(name, total, {**dict(kept), **dims}, typ) for (name, kept, typ), total in sums.items()]
         bad += [f"{where} {sel} missing" for op, sel, _ in rules if op != "max" and sel not in seen]
     if bad:
         raise RuntimeError("; ".join(bad))

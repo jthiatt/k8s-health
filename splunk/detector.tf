@@ -23,6 +23,8 @@ resource "signalfx_detector" "core_services" {
     detect(when(k_usage / k_limit > 0.9, lasting='10m')).publish('Karpenter nodepool near limit')
     keda_errors = data('keda_scaled_object_errors_total', filter=filter('service', 'keda'), rollup='delta').sum(by=['cluster', 'namespace', 'scaledObject'])
     detect(when(keda_errors > 0, lasting='10m')).publish('KEDA scaling errors')
+    kyverno_errors = data('kyverno_policy_results_total', filter=filter('service', 'kyverno') and filter('rule_result', 'error'), rollup='delta').sum(by=['cluster'])
+    detect(when(kyverno_errors > 0, lasting='10m')).publish('Kyverno policy errors')
   EOF
 
   rule {
@@ -67,6 +69,11 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "KEDA scaling errors"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "Kyverno policy errors"
     severity     = "Warning"
   }
 }
