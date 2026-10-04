@@ -179,6 +179,22 @@ agent:
           min: {alertmanager_config_last_reload_successful: 1}
 
     # istiod and every gateway installed from Istio's charts (labeled part-of=istio), in any namespace.
+    envoy-gateway:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: envoy-gateway-system, name: envoy-gateway}
+      metricsChecks:
+        - metrics: {namespace: envoy-gateway-system, selector: control-plane=envoy-gateway, port: 19001}
+          aggregate:  # labeled per resource: keep only kind and success/failure
+            status_update_total: [kind, status]
+            resource_apply_total: [kind, status]
+            xds_snapshot_update_total: [status]
+        # One Envoy proxy Deployment per Gateway, created by Envoy Gateway (none until a Gateway exists).
+        - metrics: {selector: 'app.kubernetes.io/managed-by=envoy-gateway,app.kubernetes.io/component=proxy', port: 19001, path: /stats/prometheus, optional: true}
+          forward: [envoy_listener_manager_lds_update_rejected, envoy_cluster_manager_cds_update_rejected]
+          aggregate: {envoy_http_downstream_rq_xx: [envoy_http_conn_manager_prefix, envoy_response_code_class]}
+
     falco:
       enabled: auto
       metrics: false  # needs metrics.enabled=true in Falco's Helm values

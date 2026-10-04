@@ -54,6 +54,12 @@ resource "signalfx_detector" "core_services" {
     detect(when(gk_errors > 0, lasting='10m')).publish('Gatekeeper policy errors')
     falco_drops = data('falcosecurity_*_drops_total', filter=filter('service', 'falco'), rollup='delta').sum(by=['cluster'])
     detect(when(falco_drops > 0, lasting='10m')).publish('Falco dropping events')
+    eg_rejects = data('envoy_*_update_rejected', filter=filter('service', 'envoy-gateway'), rollup='delta').sum(by=['cluster']).sum(over='15m')
+    detect(when(eg_rejects > 0)).publish('Envoy proxies rejecting config')
+    eg_listeners = filter('service', 'envoy-gateway') and not filter('envoy_http_conn_manager_prefix', 'admin', 'eg-*')
+    eg_all = data('envoy_http_downstream_rq_xx', filter=eg_listeners, rollup='rate').sum(by=['cluster', 'envoy_http_conn_manager_prefix'])
+    eg_5xx = data('envoy_http_downstream_rq_xx', filter=eg_listeners and filter('envoy_response_code_class', '5'), rollup='rate').sum(by=['cluster', 'envoy_http_conn_manager_prefix'])
+    detect(when(eg_5xx / eg_all > 0.05, lasting='5m')).publish('Envoy Gateway 5xx rate high')
   EOF
 
   rule {
@@ -169,6 +175,16 @@ resource "signalfx_detector" "core_services" {
   rule {
     detect_label = "Falco dropping events"
     severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "Envoy proxies rejecting config"
+    severity     = "Major"
+  }
+
+  rule {
+    detect_label = "Envoy Gateway 5xx rate high"
+    severity     = "Major"
   }
 }
 

@@ -144,6 +144,7 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | traefik | `traefik/traefik` | :9100, on | pod can't be scraped | minikube (chart 41.6, Traefik v3.7) |
 | external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
 | prometheus | kube-prometheus-stack: Prometheus Operator, Prometheus, Alertmanager, kube-state-metrics, node-exporter, found by label **in any namespace** (names include the release name). Turned off a part? Override `checks`. | Prometheus :9090 and Alertmanager :9093, on; rule-evaluation and notification failures **aggregated** | Prometheus or Alertmanager config failed to reload | minikube (chart 91.9, Prometheus 3.15) |
+| envoy-gateway | `envoy-gateway-system/envoy-gateway`; plus each Gateway's Envoy proxy (scraped, optional until a Gateway exists) | controller :19001 (status and apply results **aggregated**), proxies :19001 `/stats/prometheus` (config rejects, responses by listener and code class), on | a proxy can't be scraped | minikube (v1.9.2) |
 | falco | DaemonSet labeled `app.kubernetes.io/name=falco`, **in any namespace** | :8765, **off by default**: turn on `metrics.enabled=true` in Falco, then `agent.profiles.falco.metrics=true`. Rule matches **aggregated** by priority. | pod can't be scraped | minikube (chart 9.2, Falco 0.45, k8saudit plugin: this minikube's kernel has no BTF for the syscall driver) |
 | gatekeeper | controller-manager and audit in `gatekeeper-system` | audit and controller-manager :8888, on; admission requests **aggregated** by result | audit hasn't completed a run in 15 minutes | minikube (chart 3.23) |
 | istio | istiod and every gateway from Istio's charts (labeled `app.kubernetes.io/part-of=istio`), **in any namespace** | istiod :15014, on | none beyond readiness; config rejects and root CA expiry are alerts | minikube (Istio 1.30) |
@@ -268,6 +269,8 @@ These rules have no recipients by default, so they only raise incidents, which t
 | KEDA scaling errors | Warning | A ScaledObject has errors every minute for 10 minutes (needs KEDA metrics on) |
 | ARC runners failing | Warning | A runner scale set has had failed ephemeral runners for 10 minutes (needs ARC metrics on) |
 | fluentd output failing | Warning | An output has been retrying for 10 minutes (needs fluentd's output monitor) |
+| Envoy proxies rejecting config | Major | An Envoy Gateway proxy rejected listener or cluster config in the last 15 minutes |
+| Envoy Gateway 5xx rate high | Major | More than 5% of a Gateway listener's responses are 5xx for 5 minutes |
 | Falco dropping events | Warning | Falco drops kernel events or alerts every minute for 10 minutes (needs Falco metrics on) |
 | Gatekeeper policy errors | Warning | A ConstraintTemplate or Constraint has been in error for 10 minutes, so it isn't enforced |
 | Kyverno policy errors | Warning | Kyverno's policy engine returns `error` results every minute for 10 minutes |

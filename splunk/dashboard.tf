@@ -260,6 +260,17 @@ resource "signalfx_time_chart" "falco" {
   plot_type    = "ColumnChart"
 }
 
+resource "signalfx_time_chart" "envoy_gateway_5xx" {
+  name         = "Envoy Gateway 5xx % by listener"
+  program_text = <<-EOF
+    listeners = filter('service', 'envoy-gateway') and not filter('envoy_http_conn_manager_prefix', 'admin', 'eg-*')
+    all = data('envoy_http_downstream_rq_xx', filter=listeners, rollup='rate').sum(by=['cluster', 'envoy_http_conn_manager_prefix'])
+    err = data('envoy_http_downstream_rq_xx', filter=listeners and filter('envoy_response_code_class', '5'), rollup='rate').sum(by=['cluster', 'envoy_http_conn_manager_prefix'])
+    (err / all * 100).publish('5xx %')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -470,6 +481,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.falco.id
     row      = 11
     column   = 0
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.envoy_gateway_5xx.id
+    row      = 11
+    column   = 4
     width    = 4
     height   = 1
   }

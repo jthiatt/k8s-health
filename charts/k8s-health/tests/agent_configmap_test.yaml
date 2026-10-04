@@ -66,6 +66,10 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"prometheus": \{\s*"checks": \[\s*\{\s*"kind": "deployment",\s*"selector": "app.kubernetes.io/component=prometheus-operator"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"min": \{\s*"alertmanager_config_last_reload_successful": 1'}
+  - it: includes the Envoy Gateway profile, with proxy scrapes optional until a Gateway exists
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"envoy-gateway": \{\s*"checks": \[.*?"name": "envoy-gateway".*?\],\s*"mode": "auto"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"optional": true,\s*"path": "/stats/prometheus",\s*"port": 19001'}
   - it: includes the Falco profile, with metrics off by default
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"falco": \{\s*"checks": \[\s*\{\s*"kind": "daemonset",\s*"selector": "app.kubernetes.io/name=falco"\s*\}\s*\]'}
