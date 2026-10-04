@@ -48,6 +48,8 @@ resource "signalfx_detector" "core_services" {
     detect(when(istio_rejects > 0)).publish('Istio config rejected by proxies')
     istio_root = data('citadel_server_root_cert_expiry_seconds', filter=filter('service', 'istio')).min(by=['cluster'])
     detect(when(istio_root < 30 * 86400, lasting='1h')).publish('Istio root certificate expiring')
+    linkerd_issuer = data('issuer_cert_ttl_seconds', filter=filter('service', 'linkerd')).min(by=['cluster'])
+    detect(when(linkerd_issuer < 7 * 86400, lasting='1h')).publish('Linkerd issuer certificate expiring')
   EOF
 
   rule {
@@ -147,6 +149,11 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "Istio root certificate expiring"
+    severity     = "Critical"
+  }
+
+  rule {
+    detect_label = "Linkerd issuer certificate expiring"
     severity     = "Critical"
   }
 }

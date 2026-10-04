@@ -194,6 +194,18 @@ agent:
             - pilot_xds_pushes
             - citadel_server_root_cert_expiry_seconds  # time left on the mesh root CA
 
+    linkerd:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: linkerd, name: linkerd-destination}
+        - {kind: deployment, namespace: linkerd, name: linkerd-identity}
+        - {kind: deployment, namespace: linkerd, name: linkerd-proxy-injector}
+      metricsChecks:
+        - metrics: {namespace: linkerd, selector: linkerd.io/control-plane-component=identity, port: 9990}
+          forward: [issuer_cert_ttl_seconds]
+          min: {issuer_cert_ttl_seconds: 0}  # expired issuer: new proxies can't get an identity
+
     metrics-server:
       enabled: auto
       checks:

@@ -233,6 +233,16 @@ resource "signalfx_time_chart" "istio" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "mesh_certs" {
+  name         = "Days left on mesh certificates"
+  description  = "Istio root CA and Linkerd issuer certificate"
+  program_text = <<-EOF
+    (data('citadel_server_root_cert_expiry_seconds', filter=filter('service', 'istio')).min(by=['cluster']) / 86400).publish('Istio root CA')
+    (data('issuer_cert_ttl_seconds', filter=filter('service', 'linkerd')).min(by=['cluster']) / 86400).publish('Linkerd issuer')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -422,6 +432,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.istio.id
     row      = 10
     column   = 0
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.mesh_certs.id
+    row      = 10
+    column   = 4
     width    = 4
     height   = 1
   }

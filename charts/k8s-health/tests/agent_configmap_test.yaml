@@ -70,6 +70,10 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"istio": \{\s*"checks": \[\s*\{\s*"kind": "deployment",\s*"selector": "app.kubernetes.io/part-of=istio"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '"port": 15014'}
+  - it: includes the Linkerd profile, failing on an expired issuer certificate
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"linkerd": \{\s*"checks": \[.*?"name": "linkerd-identity".*?\],\s*"mode": "auto"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"min": \{\s*"issuer_cert_ttl_seconds": 0'}
   - it: includes the metrics-server profile, checking its APIService
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"metrics-server": \{\s*"checks": \[.*?"apiservice": "v1beta1.metrics.k8s.io".*?\],\s*"mode": "auto"'}
