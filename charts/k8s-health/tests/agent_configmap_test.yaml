@@ -6,7 +6,9 @@ set:
 tests:
   - it: renders the core kubernetes service with the API server, DNS and node checks
     asserts:
-      - matchRegex: {path: 'data["checks.json"]', pattern: '"apiserver": "/readyz"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"apiserver": "/readyz\?verbose"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"aggregate": \{\s*"apiserver_flowcontrol_rejected_requests_total": \[\]'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"pod_scheduling": \{\s*"first_window_seconds": 60,\s*"max_pending_seconds": 300,\s*"threshold_seconds": 5'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '"dns": "kubernetes.default.svc.cluster.local."'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '"max_not_ready": 0'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"kubernetes": \{\s*"checks": \[.*?\],\s*"mode": "always"'}
@@ -17,9 +19,18 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '"dns": "kubernetes.default.svc.corp.local."'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '"dns": "example.com."'}
+  - it: uses the configured interval as the first scheduling window and custom SLO settings
+    set:
+      intervalSeconds: 30
+      agent.core.podScheduling.thresholdSeconds: 3
+      agent.core.podScheduling.maxPendingSeconds: 120
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"pod_scheduling": \{\s*"first_window_seconds": 30,\s*"max_pending_seconds": 120,\s*"threshold_seconds": 3'}
   - it: leaves out core checks that are turned off, and the whole core service when all are
     set:
       agent.core.apiserver: false
+      agent.core.apiserverMetrics: false
+      agent.core.podScheduling.enabled: false
       agent.core.dns: false
       agent.core.nodes.enabled: false
     asserts:

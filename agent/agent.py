@@ -44,26 +44,52 @@ def bracket(host):
     return f"[{host}]" if ":" in host else host  # IPv6
 
 
-def k8s(path, method="GET", body=None, raw=False):
+def k8s_open(path, method="GET", body=None, timeout=5):
     # Talk to the API by IP, not kubernetes.default.svc, so a CoreDNS outage doesn't fail every check.
     url = f"https://{bracket(os.environ['KUBERNETES_SERVICE_HOST'])}:{os.environ['KUBERNETES_SERVICE_PORT']}{path}"
     with open(f"{SA}/token") as f:  # re-read: projected tokens rotate
         req = urllib.request.Request(url, method=method, data=None if body is None else json.dumps(body).encode(),
                                      headers={"Authorization": "Bearer " + f.read(), "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, context=ssl.create_default_context(cafile=f"{SA}/ca.crt"), timeout=5) as r:
+    return urllib.request.urlopen(req, context=ssl.create_default_context(cafile=f"{SA}/ca.crt"), timeout=timeout)
+
+
+def k8s(path, method="GET", body=None, raw=False):
+    with k8s_open(path, method, body) as r:
         return r.read().decode() if raw else json.load(r)
 
 
-def parse_prom(text):
-    """Prometheus text format -> [(name, {labels}, value, splunk_type)]."""
-    types, out = {}, []
-    for line in text.splitlines():
+def k8s_lines(path):
+    """Stream a text endpoint (e.g. the API server's /metrics, many MB on big clusters) line by line."""
+    with k8s_open(path, timeout=30) as r:
+        for raw in r:
+            yield raw.decode(errors="replace").rstrip("\n")
+
+
+def k8s_items(path, page_size=500):
+    """List a collection a page at a time, so memory stays flat however many objects there are."""
+    cont = ""
+    while True:
+        sep = "&" if "?" in path else "?"
+        page = k8s(f"{path}{sep}limit={page_size}" + (f"&continue={urllib.parse.quote(cont, safe="")}" if cont else ""))
+        yield from page.get("items", [])
+        cont = page.get("metadata", {}).get("continue")
+        if not cont:
+            return
+
+
+def parse_prom(source, wanted=None):
+    """Prometheus text format (a string or an iterable of lines) -> (name, {labels}, value, splunk_type) for each
+    series. With `wanted` (a set of metric names), other series are skipped before their labels are parsed:
+    endpoints like the API server's /metrics have tens of thousands of series."""
+    types = {}
+    for line in source.splitlines() if isinstance(source, str) else source:
         if line.startswith("# TYPE "):
             _, _, family, typ = line.split(maxsplit=3)
             types[family] = typ.strip()
+        elif wanted is not None and line.split("{", 1)[0].split(" ", 1)[0] not in wanted:
+            continue
         elif m := PROM_LINE.match(line):
-            out.append((m[1], dict(PROM_LABEL.findall(m[2] or "")), float(m[3]), splunk_type(m[1], types)))
-    return out
+            yield m[1], dict(PROM_LABEL.findall(m[2] or "")), float(m[3]), splunk_type(m[1], types)
 
 
 def splunk_type(name, types):
@@ -110,6 +136,27 @@ def metrics_targets(t):
             for p in pods]
 
 
+def http_lines(url):
+    with urllib.request.urlopen(url, timeout=5) as r:
+        for raw in r:
+            yield raw.decode(errors="replace").rstrip("\n")
+
+
+def scrape_sources(t):
+    """A metrics target -> [(where, dims, line stream)].
+    {"apiserver": "/metrics"} reads the API server's own metrics through the API (works on managed control
+    planes)."""
+    if "apiserver" in t:
+        return [("apiserver", {}, k8s_lines(t["apiserver"]))]
+    return [(dims.get("pod", url), dims, http_lines(url)) for url, dims in metrics_targets(t)]
+
+
+def wanted_names(c):
+    """Metric names a metrics check uses (forward, aggregate, thresholds)."""
+    sels = [*c.get("forward", []), *c.get("aggregate", {}), *(s for op in ("max", "min", "max_age") for s in c.get(op, {}))]
+    return {PROM_LINE.match(s + " 0")[1] for s in sels}
+
+
 def scrape(c, out):
     """Appends `forward`ed series to out as (name, value, dims, splunk_type); raises if a threshold is breached.
     `aggregate` ({selector: [labels]}) instead sums matching series by just those labels (per pod), for
@@ -117,14 +164,18 @@ def scrape(c, out):
     a unix-timestamp gauge). min and max_age also fail when no series matches; max passes on absence."""
     rules = [(op, sel, limit) for op in ("max", "min", "max_age") for sel, limit in c.get(op, {}).items()]
     bad = []
-    for url, dims in metrics_targets(c["metrics"]):
-        where = dims.get("pod", url)
-        with urllib.request.urlopen(url, timeout=5) as r:
-            series = parse_prom(r.read().decode())
-        now, seen, sums = time.time(), set(), {}
-        for name, labels, value, typ in series:
+    apiserver = "apiserver" in c["metrics"]
+    wanted = wanted_names(c) | ({"process_start_time_seconds"} if apiserver else set())
+    for where, dims, lines in scrape_sources(c["metrics"]):
+        now, seen, sums, found = time.time(), set(), {}, []
+        for name, labels, value, typ in parse_prom(lines, wanted):
+            if apiserver and name == "process_start_time_seconds":
+                # Managed clusters run several API servers behind one endpoint, so each scrape may reach a
+                # different one: tag series with the instance (its start time) so Splunk keeps each
+                # instance's counters separate instead of seeing resets.
+                dims = {**dims, "apiserver_instance": str(int(value))}
             if any(matches(sel, name, labels) for sel in c.get("forward", [])) and math.isfinite(value):  # NaN isn't JSON
-                out.append((name, value, {**labels, **dims}, typ))
+                found.append((name, value, labels, typ))
             for sel, keep in c.get("aggregate", {}).items():
                 if matches(sel, name, labels) and math.isfinite(value):
                     key = (name, tuple((k, labels.get(k, "")) for k in keep), typ)
@@ -134,6 +185,7 @@ def scrape(c, out):
                     seen.add(sel)
                     if breach(op, value, limit, now):
                         bad.append(f"{where} {name}{labels}={value} breaches {op} {limit}")
+        out += [(name, value, {**labels, **dims}, typ) for name, value, labels, typ in found]
         out += [(name, total, {**dict(kept), **dims}, typ) for (name, kept, typ), total in sums.items()]
         bad += [f"{where} {sel} missing" for op, sel, _ in rules if op != "max" and sel not in seen]
     if bad:
@@ -153,15 +205,57 @@ def not_ready_nodes(nodes, now, ignore_younger_than):
     return bad
 
 
+def ts(s):
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+
+
+def pod_scheduling(pods, since, now, threshold, max_pending):
+    """-> (scheduled, within, stuck): pods scheduled in (since, now], how many of those were scheduled within
+    `threshold` seconds of creation (Kubernetes records both times to the second), and pods that have waited
+    for a node longer than `max_pending` seconds."""
+    scheduled = within = 0
+    stuck = []
+    for p in pods:
+        created = ts(p["metadata"]["creationTimestamp"])
+        cond = next((c for c in p.get("status", {}).get("conditions", []) if c.get("type") == "PodScheduled"), None)
+        if cond and cond.get("status") == "True":
+            at = ts(cond["lastTransitionTime"])
+            if since < at <= now:
+                scheduled += 1
+                within += at - created <= threshold
+        elif p.get("status", {}).get("phase") == "Pending" and now - created > max_pending:
+            stuck.append(f"{p['metadata']['namespace']}/{p['metadata']['name']}")
+    return scheduled, within, stuck
+
+
+_scheduling = {"since": None}  # the leader remembers how far it has counted; a new leader starts one window back
+
+
 def run_check(c, out):
-    """Raises if the check fails. Metrics checks append forwarded series to out."""
+    """Raises if the check fails. Metrics and pod-scheduling checks append series to out."""
     if "metrics" in c:
         return scrape(c, out)
     if "dns" in c:
         socket.getaddrinfo(c["dns"], 443)
         return
-    if "apiserver" in c:
-        k8s(c["apiserver"], raw=True)  # e.g. /readyz: 200 "ok", or an HTTPError
+    if "apiserver" in c:  # e.g. /readyz?verbose: 200, or an error listing the failing parts ("[-]etcd failed")
+        try:
+            k8s(c["apiserver"], raw=True)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace") if e.fp else ""
+            failing = [line[3:].split()[0] for line in body.splitlines() if line.startswith("[-]")]
+            raise RuntimeError(f"{c['apiserver']} returned {e.code}" + (f"; failing: {', '.join(failing)}" if failing else "")) from None
+        return
+    if "pod_scheduling" in c:
+        o = c["pod_scheduling"] or {}
+        now = time.time()
+        since = _scheduling["since"] or now - o.get("first_window_seconds", 60)
+        n, ok, stuck = pod_scheduling(k8s_items("/api/v1/pods"), since, now, o.get("threshold_seconds", 5), o.get("max_pending_seconds", 300))
+        _scheduling["since"] = now
+        prefix = METRIC.rsplit(".", 1)[0]
+        out += [(f"{prefix}.pods_scheduled", n, {}, "gauge"), (f"{prefix}.pods_scheduled_within_slo", ok, {}, "gauge")]
+        if stuck:
+            raise RuntimeError(f"{len(stuck)} pod(s) waiting for a node over {o.get('max_pending_seconds', 300)}s: {', '.join(stuck[:10])}")
         return
     if "nodes" in c:
         opts = c["nodes"] or {}
@@ -185,11 +279,15 @@ def run_check(c, out):
 
 def label_of(c):
     if "apiserver" in c:
-        return f"apiserver{c['apiserver']}"
+        return f"apiserver{c['apiserver'].split('?')[0]}"
+    if "pod_scheduling" in c:
+        return "pods/scheduling"
     if "nodes" in c:
         return "nodes/ready"
     if "metrics" in c:
         t = c["metrics"]
+        if "apiserver" in t:
+            return f"metrics/apiserver{t['apiserver']}"
         return f"metrics/{t['url']}" if "url" in t else f"metrics/{t.get('namespace', '*')}/{t['selector']}"
     if "dns" in c:
         return f"dns/{c['dns']}"

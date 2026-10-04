@@ -29,8 +29,19 @@ agent:
 
   # -- Universal checks, reported as service "kubernetes". Each applies to any conformant cluster.
   core:
-    # API server /readyz
+    # API server /readyz?verbose (a failure names the failing part, e.g. etcd)
     apiserver: true
+    # Read the API server's own /metrics through the API (works on managed control planes) and send request
+    # counts by status code, SLI latency by bucket, in-flight and throttled requests, summed so the series
+    # count stays small (the raw metrics have tens of thousands of series). Tagged per API server instance.
+    apiserverMetrics: true
+    # Pod scheduling SLO: per cycle, count pods scheduled and those scheduled within thresholdSeconds of
+    # creation (k8s.health.pods_scheduled / pods_scheduled_within_slo). The check fails if a pod has waited
+    # for a node longer than maxPendingSeconds. Lists pods from the API server's cache once per cycle.
+    podScheduling:
+      enabled: true
+      thresholdSeconds: 5
+      maxPendingSeconds: 300
     # Resolve kubernetes.default.svc.<clusterDomain>. from the agent pod (exercises cluster DNS end to end)
     dns: true
     clusterDomain: cluster.local

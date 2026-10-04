@@ -125,7 +125,9 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 
 | Check | Passes when |
 |---|---|
-| `apiserver/readyz` | The API server's `/readyz` returns 200 |
+| `apiserver/readyz` | The API server's `/readyz` returns 200. On failure, the error names the failing readiness checks (e.g. `etcd`). |
+| `metrics/apiserver/metrics` | The API server's own `/metrics` can be read (through the API, so it works on managed control planes). Request counts by `code`, the request latency SLI histogram and in-flight requests are forwarded, **aggregated** across verbs and resources, and tagged `apiserver_instance` so each API server behind a managed endpoint keeps its own counters. |
+| `pods/scheduling` | No pod has waited more than `podScheduling.maxPendingSeconds` (default 300) for a node. Each cycle also sends `k8s.health.pods_scheduled` and `k8s.health.pods_scheduled_within_slo` (placed within `thresholdSeconds`, default 5) for the Pod scheduling SLO. |
 | `dns/kubernetes.default.svc.<clusterDomain>.` | Cluster DNS resolves from the agent pod. This exercises DNS end to end, whatever runs it. |
 | `nodes/ready` | At most `maxNotReady` (default 0) nodes aren't Ready. Nodes younger than 5 minutes are ignored, so autoscaling doesn't flap the check. |
 
@@ -258,6 +260,8 @@ These rules have no recipients by default, so they only raise incidents, which t
 | ARC runners failing | Warning | A runner scale set has had failed ephemeral runners for 10 minutes (needs ARC metrics on) |
 | fluentd output failing | Warning | An output has been retrying for 10 minutes (needs fluentd's output monitor) |
 | Kyverno policy errors | Warning | Kyverno's policy engine returns `error` results every minute for 10 minutes |
+| API server 5xx rate high | Major | More than 5% of API requests return 5xx for 5 minutes |
+| Pod scheduling SLO | Warning | Fewer than 99% of the pods scheduled in the last hour got a node within 5 s (needs at least 20 pods in the hour) |
 
 Rules for add-ons you don't run never fire.
 

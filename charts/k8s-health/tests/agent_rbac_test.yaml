@@ -13,7 +13,7 @@ tests:
       - isKind: {of: ClusterRole}
       - contains: {path: rules, content: {apiGroups: [apps], resources: [deployments, statefulsets, daemonsets], verbs: [get, list]}}
       - contains: {path: rules, content: {apiGroups: [""], resources: [nodes], verbs: [list]}}
-      - contains: {path: rules, content: {nonResourceURLs: [/readyz, /livez], verbs: [get]}}
+      - contains: {path: rules, content: {nonResourceURLs: [/readyz, /livez, /metrics], verbs: [get]}}
   - it: binds the ClusterRole to the agent's service account in the release namespace
     documentIndex: 2
     asserts:

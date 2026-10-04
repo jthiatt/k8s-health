@@ -29,6 +29,12 @@ resource "signalfx_detector" "core_services" {
     detect(when(fluentd_retries > 0, lasting='10m')).publish('fluentd output failing')
     arc_failed = data('gha_controller_failed_ephemeral_runners', filter=filter('service', 'arc')).max(by=['cluster', 'name', 'namespace'])
     detect(when(arc_failed > 0, lasting='10m')).publish('ARC runners failing')
+    api_all = data('apiserver_request_total', filter=filter('service', 'kubernetes'), rollup='rate').sum(by=['cluster'])
+    api_5xx = data('apiserver_request_total', filter=filter('service', 'kubernetes') and filter('code', '5*'), rollup='rate').sum(by=['cluster'])
+    detect(when(api_5xx / api_all > 0.05, lasting='5m')).publish('API server 5xx rate high')
+    sched = data('k8s.health.pods_scheduled', filter=filter('service', 'kubernetes'), rollup='sum').sum(by=['cluster']).sum(over='1h')
+    sched_ok = data('k8s.health.pods_scheduled_within_slo', filter=filter('service', 'kubernetes'), rollup='sum').sum(by=['cluster']).sum(over='1h')
+    detect(when(sched >= 20 and sched_ok / sched < 0.99)).publish('Pod scheduling SLO')
   EOF
 
   rule {
@@ -88,6 +94,16 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "ARC runners failing"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "API server 5xx rate high"
+    severity     = "Major"
+  }
+
+  rule {
+    detect_label = "Pod scheduling SLO"
     severity     = "Warning"
   }
 }

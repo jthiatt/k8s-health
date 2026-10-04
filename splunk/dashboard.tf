@@ -181,6 +181,24 @@ resource "signalfx_time_chart" "arc_runners" {
   stacked      = true
 }
 
+resource "signalfx_time_chart" "apiserver_requests" {
+  name         = "API server requests/s by code"
+  program_text = "data('apiserver_request_total', filter=filter('service', 'kubernetes'), rollup='rate').sum(by=['cluster', 'code']).publish('requests/s')"
+  plot_type    = "AreaChart"
+  stacked      = true
+}
+
+resource "signalfx_time_chart" "pod_scheduling" {
+  name         = "Pods scheduled within SLO % (1h)"
+  description  = "Share of pods placed on a node within the SLO threshold (default 5 s), over the last hour"
+  program_text = <<-EOF
+    all = data('k8s.health.pods_scheduled', filter=filter('service', 'kubernetes'), rollup='sum').sum(by=['cluster']).sum(over='1h')
+    ok = data('k8s.health.pods_scheduled_within_slo', filter=filter('service', 'kubernetes'), rollup='sum').sum(by=['cluster']).sum(over='1h')
+    (ok / all * 100).publish('within SLO %')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -328,6 +346,20 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.arc_runners.id
     row      = 8
     column   = 0
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.apiserver_requests.id
+    row      = 8
+    column   = 4
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.pod_scheduling.id
+    row      = 8
+    column   = 8
     width    = 4
     height   = 1
   }

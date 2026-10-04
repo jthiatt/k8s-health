@@ -229,8 +229,100 @@ def test_metrics_targets_in_every_namespace(monkeypatch):
     assert seen[0].startswith("/api/v1/pods?")
 
 
+def test_apiserver_readyz_failure_names_the_failing_parts(monkeypatch):
+    body = b"[+]ping ok\n[-]etcd failed: reason withheld\n[+]log ok\n[-]poststarthook/rbac failed: x\nreadyz check failed\n"
+
+    def failing(path, raw=False, **_):
+        raise urllib.error.HTTPError(path, 500, "err", {}, io.BytesIO(body))
+
+    monkeypatch.setattr(agent, "k8s", failing)
+    with pytest.raises(RuntimeError, match=r"/readyz\?verbose returned 500; failing: etcd, poststarthook/rbac"):
+        run_check({"apiserver": "/readyz?verbose"}, [])
+
+    def failing_without_body(path, raw=False, **_):
+        raise urllib.error.HTTPError(path, 403, "forbidden", {}, None)
+
+    monkeypatch.setattr(agent, "k8s", failing_without_body)
+    with pytest.raises(RuntimeError, match=r"returned 403$"):
+        run_check({"apiserver": "/readyz?verbose"}, [])
+
+
+APISERVER_PROM = """# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.7000000123e+09
+# TYPE apiserver_request_total counter
+apiserver_request_total{code="200",verb="GET",resource="pods"} 10
+apiserver_request_total{code="200",verb="LIST",resource="nodes"} 5
+apiserver_request_total{code="503",verb="GET",resource="pods"} 1
+"""
+
+
+def test_apiserver_metrics_are_tagged_with_the_answering_instance(monkeypatch):
+    monkeypatch.setattr(agent, "k8s_lines", lambda path: iter(APISERVER_PROM.splitlines()))
+    out = []
+    scrape({"metrics": {"apiserver": "/metrics"}, "aggregate": {"apiserver_request_total": ["code"]}}, out)
+    got = {d["code"]: (v, d["apiserver_instance"]) for n, v, d, _ in out}
+    assert got == {"200": (15.0, "1700000012"), "503": (1.0, "1700000012")}
+    monkeypatch.setattr(agent, "k8s_lines", lambda path: iter(["x 1"]))  # no start time exported: no tag
+    out = []
+    scrape({"metrics": {"apiserver": "/metrics"}, "forward": ["x"]}, out)
+    assert out == [("x", 1.0, {}, "gauge")]
+
+
+def test_parse_prom_skips_unwanted_series_from_a_stream():
+    lines = iter(["# TYPE a counter", 'a{x="1"} 2', 'b{y="2"} 3', "a_bucket 1"])
+    assert list(agent.parse_prom(lines, {"a"})) == [("a", {"x": "1"}, 2.0, "cumulative_counter")]
+
+
+def test_k8s_lines_and_paged_items(monkeypatch, tmp_path):
+    monkeypatch.setattr(agent, "k8s_open", lambda path, timeout=5: FakeResponse(b"a 1\nb 2\n"))
+    assert list(agent.k8s_lines("/metrics")) == ["a 1", "b 2"]
+    pages = {"": {"items": [1, 2], "metadata": {"continue": "t/1"}}, "t%2F1": {"items": [3], "metadata": {}}}
+    seen = []
+    monkeypatch.setattr(agent, "k8s", lambda path, **_: seen.append(path) or pages[path.partition("continue=")[2]])
+    assert list(agent.k8s_items("/api/v1/pods", page_size=2)) == [1, 2, 3]
+    assert seen == ["/api/v1/pods?limit=2", "/api/v1/pods?limit=2&continue=t%2F1"]
+
+
+def pod(name, created, scheduled_at=None, scheduled="True", phase="Running"):
+    iso = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    conds = [] if scheduled_at is None else [{"type": "PodScheduled", "status": scheduled, "lastTransitionTime": iso(scheduled_at)}]
+    return {"metadata": {"namespace": "ns", "name": name, "creationTimestamp": iso(created)},
+            "status": {"phase": phase, "conditions": conds}}
+
+
+def test_pod_scheduling_counts():
+    now = 2_000_000_000.0
+    pods = [pod("fast", now - 30, now - 28),               # scheduled in the window, 2 s after creation
+            pod("edge", now - 30, now - 25),               # exactly 5 s: counts as within
+            pod("slow", now - 40, now - 20),               # 20 s: a miss
+            pod("old", now - 999, now - 990),              # scheduled before the window: not counted again
+            pod("waiting", now - 600, phase="Pending"),    # no PodScheduled yet, waiting 10 min: stuck
+            pod("unschedulable", now - 400, now - 400, scheduled="False", phase="Pending"),  # stuck
+            pod("young", now - 10, phase="Pending")]       # waiting, but not for long
+    assert agent.pod_scheduling(pods, now - 60, now, 5, 300) == (3, 2, ["ns/waiting", "ns/unschedulable"])
+
+
+def test_pod_scheduling_check_keeps_its_window_across_cycles(monkeypatch):
+    now = time.time()
+    pods = [pod("a", now - 20, now - 18)]
+    monkeypatch.setattr(agent, "k8s", lambda path, **_: {"items": pods})
+    monkeypatch.setattr(agent, "_scheduling", {"since": None})
+    out = []
+    run_check({"pod_scheduling": {"threshold_seconds": 5, "first_window_seconds": 60}}, out)
+    assert out == [("k8s.health.pods_scheduled", 1, {}, "gauge"), ("k8s.health.pods_scheduled_within_slo", 1, {}, "gauge")]
+    out = []
+    run_check({"pod_scheduling": {}}, out)  # next cycle: the same pod isn't counted twice
+    assert out[0][1] == 0
+    pods.append(pod("stuck", now - 900, phase="Pending"))
+    with pytest.raises(RuntimeError, match="1 pod\\(s\\) waiting for a node over 300s: ns/stuck"):
+        run_check({"pod_scheduling": {}}, [])
+
+
 def test_label_of_every_kind():
     assert label_of({"apiserver": "/readyz"}) == "apiserver/readyz"
+    assert label_of({"apiserver": "/readyz?verbose"}) == "apiserver/readyz"  # same label as before the ?verbose
+    assert label_of({"pod_scheduling": {}}) == "pods/scheduling"
+    assert label_of({"metrics": {"apiserver": "/metrics"}}) == "metrics/apiserver/metrics"
     assert label_of({"nodes": {}}) == "nodes/ready"
     assert label_of({"metrics": {"url": "http://x/m"}}) == "metrics/http://x/m"
     assert label_of({"metrics": {"namespace": "n", "selector": "a=b"}}) == "metrics/n/a=b"

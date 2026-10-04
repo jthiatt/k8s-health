@@ -2,7 +2,9 @@
 {{- /* Render the agent's checks file from core + profiles + extraServices. */ -}}
 {{- $core := .Values.agent.core -}}
 {{- $checks := list -}}
-{{- if $core.apiserver }}{{ $checks = append $checks (dict "apiserver" "/readyz") }}{{ end -}}
+{{- if $core.apiserver }}{{ $checks = append $checks (dict "apiserver" "/readyz?verbose") }}{{ end -}}
+{{- if $core.apiserverMetrics }}{{ $checks = append $checks (dict "metrics" (dict "apiserver" "/metrics") "forward" (list "apiserver_current_inflight_requests") "aggregate" (dict "apiserver_request_total" (list "code") "apiserver_request_sli_duration_seconds_bucket" (list "le") "apiserver_request_sli_duration_seconds_count" (list) "apiserver_request_sli_duration_seconds_sum" (list) "apiserver_flowcontrol_rejected_requests_total" (list))) }}{{ end -}}
+{{- if $core.podScheduling.enabled }}{{ $checks = append $checks (dict "pod_scheduling" (dict "threshold_seconds" $core.podScheduling.thresholdSeconds "max_pending_seconds" $core.podScheduling.maxPendingSeconds "first_window_seconds" .Values.intervalSeconds)) }}{{ end -}}
 {{- if $core.dns }}{{ $checks = append $checks (dict "dns" (printf "kubernetes.default.svc.%s." $core.clusterDomain)) }}{{ end -}}
 {{- range $core.extraDnsNames }}{{ $checks = append $checks (dict "dns" .) }}{{ end -}}
 {{- if $core.nodes.enabled }}{{ $checks = append $checks (dict "nodes" (dict "max_not_ready" $core.nodes.maxNotReady "ignore_younger_than_seconds" $core.nodes.ignoreYoungerThanSeconds)) }}{{ end -}}
