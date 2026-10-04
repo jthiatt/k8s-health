@@ -143,6 +143,7 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | argocd | server, repo-server, redis, application-controller | :8082 and :8084, on | work queue over 100 | minikube |
 | traefik | `traefik/traefik` | :9100, on | pod can't be scraped | minikube (chart 41.6, Traefik v3.7) |
 | external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
+| metrics-server | `kube-system/metrics-server`, and the `v1beta1.metrics.k8s.io` APIService is Available | none (its metrics need client auth) | the metrics API isn't served, which breaks HPAs and `kubectl top` | minikube (chart 3.14, v0.9) |
 | cert-manager | controller, cainjector, webhook in `cert-manager` | controller :9402, on | pod can't be scraped | minikube (chart v1.21) |
 | external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | minikube (chart 1.23) |
 | karpenter | `kube-system/karpenter` | :8080, on | pod can't be scraped | not yet |
@@ -199,6 +200,8 @@ agent:
         - {kind: deployment, namespace: payments, name: gateway}
         # Or find workloads by label, in one namespace or (no namespace) all of them; every match must be ready
         - {kind: daemonset, selector: app.kubernetes.io/name=log-shipper}
+        # An aggregated API is Available (served by its backend), e.g. v1beta1.metrics.k8s.io
+        - {apiservice: v1beta1.custom.metrics.k8s.io}
         # DNS lookup. A trailing dot skips search-domain expansion, so failures come back fast.
         - {dns: gateway.payments.svc.cluster.local.}
         # Scrape Prometheus metrics: every running pod matching the selector, by IP (or {url: http://host:port/metrics}).
@@ -222,7 +225,7 @@ How metrics checks behave:
 - **Aggregating:** `aggregate` sends the **sum** of the matching series, grouped by only the labels you list (`[]` = one total), still per pod. Use it for metrics labeled per resource, policy or namespace, which would otherwise create thousands of series. The Kyverno profile uses it for its admission and policy metrics. Use either `forward` or `aggregate` for a given metric, not both.
 - **Watch the number of series:** forwarded series multiply by pods and label values, so only forward what you chart or alert on, and aggregate the rest.
 
-Two more check types, used by the core service: `{apiserver: /readyz}` and `{nodes: {max_not_ready: 0, ignore_younger_than_seconds: 300}}`.
+More check types, used by the core service: `{apiserver: /readyz?verbose}`, `{metrics: {apiserver: /metrics}, ...}`, `{nodes: {max_not_ready: 0, ignore_younger_than_seconds: 300}}` and `{pod_scheduling: {threshold_seconds: 5, max_pending_seconds: 300}}`.
 
 ---
 

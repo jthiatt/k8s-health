@@ -204,6 +204,18 @@ def test_run_check_dns_and_apiserver(monkeypatch):
     assert calls == [("/readyz", True)]
 
 
+def test_apiservice_must_be_available(monkeypatch):
+    status = {"status": {"conditions": [{"type": "Available", "status": "True"}]}}
+    seen = []
+    monkeypatch.setattr(agent, "k8s", lambda path, **_: seen.append(path) or status)
+    run_check({"apiservice": "v1beta1.metrics.k8s.io"}, [])
+    assert seen == ["/apis/apiregistration.k8s.io/v1/apiservices/v1beta1.metrics.k8s.io"]
+    status["status"]["conditions"][0].update(status="False", reason="FailedDiscoveryCheck", message="no response")
+    with pytest.raises(RuntimeError, match="not available: FailedDiscoveryCheck: no response"):
+        run_check({"apiservice": "v1beta1.metrics.k8s.io"}, [])
+    assert label_of({"apiservice": "v1beta1.metrics.k8s.io"}) == "apiservice/v1beta1.metrics.k8s.io"
+
+
 def test_workloads_found_by_label_in_any_namespace(monkeypatch):
     seen = []
     items = []

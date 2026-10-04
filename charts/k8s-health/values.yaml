@@ -154,6 +154,12 @@ agent:
             - externalsecret_sync_calls_total
           max: {'clustersecretstore_status_condition{condition="Ready",status="False"}': 0}
 
+    metrics-server:
+      enabled: auto
+      checks:
+        - {kind: deployment, namespace: kube-system, name: metrics-server}
+        - {apiservice: v1beta1.metrics.k8s.io}
+
     cert-manager:
       enabled: auto
       metrics: true

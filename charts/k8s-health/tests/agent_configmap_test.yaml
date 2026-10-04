@@ -62,6 +62,9 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"kyverno": \{\s*"checks": \[.*?"name": "kyverno-admission-controller".*?\],\s*"mode": "auto"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"aggregate": \{.*?"kyverno_policy_results_total": \[\s*"rule_result"\s*\]'}
+  - it: includes the metrics-server profile, checking its APIService
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"metrics-server": \{\s*"checks": \[.*?"apiservice": "v1beta1.metrics.k8s.io".*?\],\s*"mode": "auto"'}
   - it: includes the cert-manager profile, scraping only the controller
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"cert-manager": \{\s*"checks": \[.*?"name": "cert-manager-webhook".*?\],\s*"mode": "auto"'}

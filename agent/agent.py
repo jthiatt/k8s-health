@@ -263,6 +263,12 @@ def run_check(c, out):
         if len(bad) > opts.get("max_not_ready", 0):
             raise RuntimeError(f"{len(bad)} node(s) not Ready: {', '.join(bad[:10])}")
         return
+    if "apiservice" in c:  # an aggregated API (e.g. metrics.k8s.io): its pods can be Ready while the API isn't served
+        conds = k8s(f"/apis/apiregistration.k8s.io/v1/apiservices/{c['apiservice']}").get("status", {}).get("conditions", [])
+        available = next((x for x in conds if x["type"] == "Available"), {})
+        if available.get("status") != "True":
+            raise RuntimeError(f"not available: {available.get('reason')}: {available.get('message')}")
+        return
     if "selector" in c:  # workloads found by label, in one namespace or all (for components with no fixed home)
         q = urllib.parse.urlencode({"labelSelector": c["selector"]})
         items = k8s(f"/apis/apps/v1{scope(c)}/{PATHS[c['kind']]}?{q}")["items"]
@@ -291,6 +297,8 @@ def label_of(c):
         return f"metrics/{t['url']}" if "url" in t else f"metrics/{t.get('namespace', '*')}/{t['selector']}"
     if "dns" in c:
         return f"dns/{c['dns']}"
+    if "apiservice" in c:
+        return f"apiservice/{c['apiservice']}"
     return f"{c['kind']}/{c.get('namespace', '*')}/{c['selector'] if 'selector' in c else c['name']}"
 
 
