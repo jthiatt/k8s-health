@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+  - package-ecosystem: pip
+    directory: /status-page
+    schedule: {interval: weekly}
+  - package-ecosystem: docker
+    directories: [/agent, /status-page]
+    schedule: {interval: weekly}
+  - package-ecosystem: terraform
+    directory: /splunk
+    schedule: {interval: weekly}

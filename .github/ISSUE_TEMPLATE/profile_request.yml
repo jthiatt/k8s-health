@@ -1,0 +1,26 @@
+name: Add-on profile
+description: Ask for (or offer) checks for a component that isn't covered yet, or report a profile that doesn't match your install
+labels: [profile]
+body:
+  - type: input
+    id: component
+    attributes:
+      label: Component, and how it's installed
+      placeholder: e.g. cert-manager v1.18 via its official Helm chart
+    validations: {required: true}
+  - type: textarea
+    id: workloads
+    attributes:
+      label: Its workloads and metrics
+      description: Namespace, Deployment/DaemonSet/StatefulSet names, pod labels, metrics port. `kubectl get deploy,ds,sts -n <ns>` and `kubectl get pods -n <ns> --show-labels` help.
+  - type: textarea
+    id: health
+    attributes:
+      label: What does "unhealthy" look like for it?
+      description: Which metric or condition should fail the check?
+  - type: checkboxes
+    id: pr
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to send a PR for this (see CONTRIBUTING.md, "Adding an add-on profile")

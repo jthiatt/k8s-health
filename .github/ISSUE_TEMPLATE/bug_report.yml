@@ -1,0 +1,31 @@
+name: Bug report
+description: Something in the agent, status page, chart or Terraform doesn't work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes:
+      label: k8s-health version (chart or image tag)
+    validations: {required: true}
+  - type: input
+    id: cluster
+    attributes:
+      label: Kubernetes distribution and version
+      placeholder: e.g. EKS 1.33, GKE Autopilot 1.32, k3s v1.31
+    validations: {required: true}
+  - type: textarea
+    id: values
+    attributes:
+      label: Your Helm values (remove anything secret)
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Leader logs
+      description: "`kubectl -n k8s-health logs $(kubectl -n k8s-health get lease k8s-health-agent -o jsonpath='{.spec.holderIdentity}')`"
+      render: text
