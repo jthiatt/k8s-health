@@ -14,7 +14,7 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: [deployments, statefulsets, daemonsets]
-    verbs: [get]
+    verbs: [get, list]  # list: workloads found by label (e.g. fluentd, whose namespace varies)
   - apiGroups: [""]
     resources: [pods]  # metrics checks find pods by label selector
     verbs: [list]

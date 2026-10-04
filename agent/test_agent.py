@@ -200,6 +200,31 @@ def test_run_check_dns_and_apiserver(monkeypatch):
     assert calls == [("/readyz", True)]
 
 
+def test_workloads_found_by_label_in_any_namespace(monkeypatch):
+    seen = []
+    items = []
+    monkeypatch.setattr(agent, "k8s", lambda path, **_: seen.append(path) or {"items": items})
+    check = {"kind": "daemonset", "selector": "app.kubernetes.io/name=fluentd"}
+    with pytest.raises(urllib.error.HTTPError) as e:  # nothing matches: "not installed" for auto mode
+        run_check(check, [])
+    assert agent.is_missing(e.value) and seen[-1] == "/apis/apps/v1/daemonsets?labelSelector=app.kubernetes.io%2Fname%3Dfluentd"
+    items += [{"metadata": {"namespace": "logging", "name": "fluentd"}, "status": {"desiredNumberScheduled": 2, "numberReady": 2}}]
+    run_check(check, [])  # every match ready
+    items += [{"metadata": {"namespace": "other", "name": "fluentd"}, "status": {"desiredNumberScheduled": 2, "numberReady": 1}}]
+    with pytest.raises(RuntimeError, match="not ready: other/fluentd"):
+        run_check(check, [])
+    items[:] = items[:1]
+    run_check({**check, "namespace": "logging"}, [])
+    assert seen[-1].startswith("/apis/apps/v1/namespaces/logging/daemonsets?")
+
+
+def test_metrics_targets_in_every_namespace(monkeypatch):
+    seen = []
+    monkeypatch.setattr(agent, "k8s", lambda path, **_: seen.append(path) or {"items": [{"metadata": {"name": "p"}, "status": {"podIP": "10.0.0.5"}}]})
+    assert agent.metrics_targets({"selector": "app=x", "port": 24231}) == [("http://10.0.0.5:24231/metrics", {"pod": "p"})]
+    assert seen[0].startswith("/api/v1/pods?")
+
+
 def test_label_of_every_kind():
     assert label_of({"apiserver": "/readyz"}) == "apiserver/readyz"
     assert label_of({"nodes": {}}) == "nodes/ready"
@@ -207,6 +232,9 @@ def test_label_of_every_kind():
     assert label_of({"metrics": {"namespace": "n", "selector": "a=b"}}) == "metrics/n/a=b"
     assert label_of({"dns": "x."}) == "dns/x."
     assert label_of({"kind": "deployment", "namespace": "n", "name": "d"}) == "deployment/n/d"
+    assert label_of({"kind": "daemonset", "selector": "app=f"}) == "daemonset/*/app=f"
+    assert label_of({"kind": "daemonset", "namespace": "n", "selector": "app=f"}) == "daemonset/n/app=f"
+    assert label_of({"metrics": {"selector": "app=f", "port": 1}}) == "metrics/*/app=f"
 
 
 def test_bracket():

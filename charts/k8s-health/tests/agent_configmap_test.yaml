@@ -51,6 +51,11 @@ tests:
     asserts:
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"kyverno": \{\s*"checks": \[.*?"name": "kyverno-admission-controller".*?\],\s*"mode": "auto"'}
       - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"aggregate": \{.*?"kyverno_policy_results_total": \[\s*"rule_result"\s*\]'}
+  - it: includes the fluentd profile, found by label in any namespace
+    asserts:
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"fluentd": \{\s*"checks": \[\s*\{\s*"kind": "daemonset",\s*"selector": "app.kubernetes.io/name=fluentd"'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '"port": 24231'}
+      - matchRegex: {path: 'data["checks.json"]', pattern: '(?s)"fluentd_input_status_num_records_total": \[\s*\]'}
   - it: turns Cilium metrics on when asked
     set:
       agent.profiles.cilium.metrics: true

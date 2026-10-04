@@ -163,6 +163,13 @@ resource "signalfx_time_chart" "kyverno_results" {
   stacked      = true
 }
 
+resource "signalfx_time_chart" "fluentd_retries" {
+  name         = "fluentd output retries"
+  description  = "Retries pending per output plugin; above 0 for long means logs aren't being delivered"
+  program_text = "data('fluentd_output_status_retry_count', filter=filter('service', 'fluentd')).max(by=['cluster', 'plugin_id']).publish('retries')"
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -296,6 +303,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.kyverno_results.id
     row      = 7
     column   = 4
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.fluentd_retries.id
+    row      = 7
+    column   = 8
     width    = 4
     height   = 1
   }

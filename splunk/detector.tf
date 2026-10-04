@@ -25,6 +25,8 @@ resource "signalfx_detector" "core_services" {
     detect(when(keda_errors > 0, lasting='10m')).publish('KEDA scaling errors')
     kyverno_errors = data('kyverno_policy_results_total', filter=filter('service', 'kyverno') and filter('rule_result', 'error'), rollup='delta').sum(by=['cluster'])
     detect(when(kyverno_errors > 0, lasting='10m')).publish('Kyverno policy errors')
+    fluentd_retries = data('fluentd_output_status_retry_count', filter=filter('service', 'fluentd')).max(by=['cluster', 'plugin_id'])
+    detect(when(fluentd_retries > 0, lasting='10m')).publish('fluentd output failing')
   EOF
 
   rule {
@@ -74,6 +76,11 @@ resource "signalfx_detector" "core_services" {
 
   rule {
     detect_label = "Kyverno policy errors"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "fluentd output failing"
     severity     = "Warning"
   }
 }

@@ -90,12 +90,17 @@ def breach(op, value, limit, now):
     return now - value > limit  # max_age: value is a unix timestamp
 
 
+def scope(c):
+    """API path segment for a check's namespace; no namespace means every namespace."""
+    return f"/namespaces/{c['namespace']}" if c.get("namespace") else ""
+
+
 def metrics_targets(t):
-    """{"url": ...} or {"namespace", "selector", "port"} (scrapes every running pod by IP) -> [(url, dims)]."""
+    """{"url": ...} or {"selector", "port", optional "namespace"} (scrapes every running pod by IP) -> [(url, dims)]."""
     if "url" in t:
         return [(t["url"], {})]
     q = urllib.parse.urlencode({"labelSelector": t["selector"], "fieldSelector": "status.phase=Running"})
-    pods = [p for p in k8s(f"/api/v1/namespaces/{t['namespace']}/pods?{q}")["items"] if p["status"].get("podIP")]
+    pods = [p for p in k8s(f"/api/v1{scope(t)}/pods?{q}")["items"] if p["status"].get("podIP")]
     if not pods:
         raise RuntimeError("no running pods match selector")
     return [(f"http://{bracket(p['status']['podIP'])}:{t['port']}{t.get('path', '/metrics')}", {"pod": p["metadata"]["name"]})
@@ -161,6 +166,15 @@ def run_check(c, out):
         if len(bad) > opts.get("max_not_ready", 0):
             raise RuntimeError(f"{len(bad)} node(s) not Ready: {', '.join(bad[:10])}")
         return
+    if "selector" in c:  # workloads found by label, in one namespace or all (for components with no fixed home)
+        q = urllib.parse.urlencode({"labelSelector": c["selector"]})
+        items = k8s(f"/apis/apps/v1{scope(c)}/{PATHS[c['kind']]}?{q}")["items"]
+        if not items:  # same as a named workload that doesn't exist: "not installed" in auto mode
+            raise urllib.error.HTTPError(c["selector"], 404, f"no {c['kind']} matches {c['selector']}", {}, None)
+        bad = [f"{o['metadata']['namespace']}/{o['metadata']['name']}" for o in items if not ready(c["kind"], o)]
+        if bad:
+            raise RuntimeError(f"not ready: {', '.join(bad)}")
+        return
     obj = k8s(f"/apis/apps/v1/namespaces/{c['namespace']}/{PATHS[c['kind']]}/{c['name']}")
     if not ready(c["kind"], obj):
         raise RuntimeError(f"not ready: {obj.get('status')}")
@@ -173,8 +187,10 @@ def label_of(c):
         return "nodes/ready"
     if "metrics" in c:
         t = c["metrics"]
-        return f"metrics/{t['url']}" if "url" in t else f"metrics/{t['namespace']}/{t['selector']}"
-    return f"dns/{c['dns']}" if "dns" in c else f"{c['kind']}/{c['namespace']}/{c['name']}"
+        return f"metrics/{t['url']}" if "url" in t else f"metrics/{t.get('namespace', '*')}/{t['selector']}"
+    if "dns" in c:
+        return f"dns/{c['dns']}"
+    return f"{c['kind']}/{c.get('namespace', '*')}/{c['selector'] if 'selector' in c else c['name']}"
 
 
 def otlp(points, ts_ns):

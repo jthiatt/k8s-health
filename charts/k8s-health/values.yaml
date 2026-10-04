@@ -196,6 +196,24 @@ agent:
             kyverno_admission_review_duration_seconds_count: []
             kyverno_admission_review_duration_seconds_sum: []
 
+    fluentd:
+      enabled: auto
+      metrics: true
+      # No fixed namespace (the fluent/fluentd chart installs wherever you point it), so find it by its
+      # chart label in any namespace. Set `namespace:` on these checks to limit the search.
+      checks:
+        - {kind: daemonset, selector: app.kubernetes.io/name=fluentd}
+      metricsChecks:
+        - metrics: {selector: app.kubernetes.io/name=fluentd, port: 24231}
+          # Input records are labeled per container log file (unbounded), so send one total per fluentd pod.
+          aggregate: {fluentd_input_status_num_records_total: []}
+          forward:
+            # Only exported if fluentd's config includes a `@type prometheus_output_monitor` source (README).
+            - fluentd_output_status_buffer_queue_length
+            - fluentd_output_status_buffer_total_bytes
+            - fluentd_output_status_retry_count
+            - fluentd_output_status_num_errors
+
   # -- Your own services, same shape as a profile: {name: {enabled: true|auto, checks: [...]}}
   extraServices: {}
 

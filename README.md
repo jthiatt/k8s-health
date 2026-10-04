@@ -143,6 +143,7 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
 | external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | minikube (chart 1.23) |
 | karpenter | `kube-system/karpenter` | :8080, on | pod can't be scraped | not yet |
+| fluentd | DaemonSet labeled `app.kubernetes.io/name=fluentd`, **in any namespace** | :24231, on; input records **aggregated** per pod | pod can't be scraped | minikube (chart 0.6, fluentd 1.19) |
 | kyverno | admission, background, cleanup and reports controllers in `kyverno` | :8000 on each, on; policy and admission metrics **aggregated** by result | pod can't be scraped | minikube (Kyverno 1.19) |
 | keda | operator, metrics-apiserver, admission-webhooks in `keda` | operator :8080, **off by default** | pod can't be scraped | minikube (KEDA 2.21, metrics on) |
 
@@ -151,6 +152,8 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 Some forwarded series only exist in some setups or once the component is in use. `cilium_operator_ipam_ips` is only exported in Cilium's cloud IPAM modes (AWS ENI, Azure, multi-pool), `traefik_entrypoint_requests_total` appears after Traefik serves its first request, and `externalsecret_sync_calls_total` once an ExternalSecret exists. Until then their dashboard charts stay empty; that's expected.
 
 **Upgrading:** use `helm upgrade --reset-then-reuse-values` (Helm 3.14+), as in the quick start. Plain `--reuse-values` also keeps the *previous* chart's defaults, so improved profiles in a new version would be silently ignored.
+
+fluentd's output metrics (queue length, retries, errors) need a `@type prometheus_output_monitor` source in its config. With the fluent/fluentd chart, add one under `fileConfigs`, for example `05_output_monitor.conf: "<source>\n  @type prometheus_output_monitor\n</source>"`. Without it, only input record counts are sent.
 
 Turn KEDA's metrics on (`agent.profiles.keda.metrics=true`) only after enabling them in KEDA (`prometheus.operator.enabled=true`).
 
@@ -188,9 +191,12 @@ agent:
       checks:
         # Workload readiness: every desired replica is ready. kind: deployment | statefulset | daemonset
         - {kind: deployment, namespace: payments, name: gateway}
+        # Or find workloads by label, in one namespace or (no namespace) all of them; every match must be ready
+        - {kind: daemonset, selector: app.kubernetes.io/name=log-shipper}
         # DNS lookup. A trailing dot skips search-domain expansion, so failures come back fast.
         - {dns: gateway.payments.svc.cluster.local.}
         # Scrape Prometheus metrics: every running pod matching the selector, by IP (or {url: http://host:port/metrics}).
+        # Leave out namespace to match pods in every namespace.
         - metrics: {namespace: payments, selector: app=gateway, port: 9090}
           forward: [http_requests_total]               # also send these series to Splunk
           aggregate: {http_requests_total: [code]}      # or: send sums, grouped by just these labels
@@ -246,6 +252,7 @@ These rules have no recipients by default, so they only raise incidents, which t
 | ExternalSecret not syncing | Warning | An ExternalSecret has been not Ready for 15 minutes |
 | Karpenter nodepool near limit | Warning | A nodepool has been above 90% of a limit for 10 minutes |
 | KEDA scaling errors | Warning | A ScaledObject has errors every minute for 10 minutes (needs KEDA metrics on) |
+| fluentd output failing | Warning | An output has been retrying for 10 minutes (needs fluentd's output monitor) |
 | Kyverno policy errors | Warning | Kyverno's policy engine returns `error` results every minute for 10 minutes |
 
 Rules for add-ons you don't run never fire.
