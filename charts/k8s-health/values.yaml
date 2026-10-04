@@ -154,6 +154,22 @@ agent:
             - externalsecret_sync_calls_total
           max: {'clustersecretstore_status_condition{condition="Ready",status="False"}': 0}
 
+    cert-manager:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: cert-manager, name: cert-manager}
+        - {kind: deployment, namespace: cert-manager, name: cert-manager-cainjector}
+        - {kind: deployment, namespace: cert-manager, name: cert-manager-webhook}
+      metricsChecks:
+        - metrics: {namespace: cert-manager, selector: 'app.kubernetes.io/name=cert-manager,app.kubernetes.io/component=controller', port: 9402}
+          forward:
+            - 'certmanager_certificate_ready_status{condition="False"}'
+            - 'certmanager_issuer_ready_status{condition="False"}'
+            - 'certmanager_clusterissuer_ready_status{condition="False"}'
+            - certmanager_certificate_expiration_timestamp_seconds
+            - certmanager_clock_time_seconds_gauge
+
     external-dns:
       enabled: auto
       metrics: true

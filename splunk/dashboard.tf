@@ -199,6 +199,22 @@ resource "signalfx_time_chart" "pod_scheduling" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_list_chart" "certs_not_ready" {
+  name         = "Certificates not Ready"
+  program_text = "data('certmanager_certificate_ready_status', filter=filter('service', 'cert-manager') and filter('condition', 'False')).max(by=['cluster', 'namespace', 'name']).above(0).publish('not ready')"
+}
+
+resource "signalfx_time_chart" "cert_days_left" {
+  name         = "Days until the next certificate expires"
+  description  = "Per cluster, the soonest expiry of any cert-manager Certificate"
+  program_text = <<-EOF
+    expiry = data('certmanager_certificate_expiration_timestamp_seconds', filter=filter('service', 'cert-manager')).above(0).min(by=['cluster'])
+    clock = data('certmanager_clock_time_seconds_gauge', filter=filter('service', 'cert-manager')).max(by=['cluster'])
+    ((expiry - clock) / 86400).publish('days left')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -360,6 +376,20 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.pod_scheduling.id
     row      = 8
     column   = 8
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_list_chart.certs_not_ready.id
+    row      = 9
+    column   = 0
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.cert_days_left.id
+    row      = 9
+    column   = 4
     width    = 4
     height   = 1
   }

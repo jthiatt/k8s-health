@@ -35,6 +35,11 @@ resource "signalfx_detector" "core_services" {
     sched = data('k8s.health.pods_scheduled', filter=filter('service', 'kubernetes'), rollup='sum').sum(by=['cluster']).sum(over='1h')
     sched_ok = data('k8s.health.pods_scheduled_within_slo', filter=filter('service', 'kubernetes'), rollup='sum').sum(by=['cluster']).sum(over='1h')
     detect(when(sched >= 20 and sched_ok / sched < 0.99)).publish('Pod scheduling SLO')
+    cert_not_ready = data('certmanager_certificate_ready_status', filter=filter('service', 'cert-manager') and filter('condition', 'False')).max(by=['cluster', 'namespace', 'name'])
+    detect(when(cert_not_ready > 0, lasting='15m')).publish('Certificate not ready')
+    cert_expiry = data('certmanager_certificate_expiration_timestamp_seconds', filter=filter('service', 'cert-manager')).above(0).min(by=['cluster'])
+    cert_clock = data('certmanager_clock_time_seconds_gauge', filter=filter('service', 'cert-manager')).max(by=['cluster'])
+    detect(when(cert_expiry - cert_clock < 14 * 86400, lasting='1h')).publish('Certificate expiring')
   EOF
 
   rule {
@@ -105,6 +110,16 @@ resource "signalfx_detector" "core_services" {
   rule {
     detect_label = "Pod scheduling SLO"
     severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "Certificate not ready"
+    severity     = "Warning"
+  }
+
+  rule {
+    detect_label = "Certificate expiring"
+    severity     = "Major"
   }
 }
 

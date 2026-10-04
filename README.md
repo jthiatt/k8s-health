@@ -143,6 +143,7 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | argocd | server, repo-server, redis, application-controller | :8082 and :8084, on | work queue over 100 | minikube |
 | traefik | `traefik/traefik` | :9100, on | pod can't be scraped | minikube (chart 41.6, Traefik v3.7) |
 | external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
+| cert-manager | controller, cainjector, webhook in `cert-manager` | controller :9402, on | pod can't be scraped | minikube (chart v1.21) |
 | external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | minikube (chart 1.23) |
 | karpenter | `kube-system/karpenter` | :8080, on | pod can't be scraped | not yet |
 | arc | GitHub Actions Runner Controller, labeled `app.kubernetes.io/name=gha-rs-controller`, **in any namespace**; plus each runner scale set's listener | controller and listeners :8080, **off by default** | pod can't be scraped | minikube (ARC 0.15, controller only; see below) |
@@ -260,6 +261,8 @@ These rules have no recipients by default, so they only raise incidents, which t
 | ARC runners failing | Warning | A runner scale set has had failed ephemeral runners for 10 minutes (needs ARC metrics on) |
 | fluentd output failing | Warning | An output has been retrying for 10 minutes (needs fluentd's output monitor) |
 | Kyverno policy errors | Warning | Kyverno's policy engine returns `error` results every minute for 10 minutes |
+| Certificate expiring | Major | A cert-manager Certificate expires in under 14 days, for an hour (renewal normally happens 30 days before) |
+| Certificate not ready | Warning | A cert-manager Certificate has been not Ready for 15 minutes |
 | API server 5xx rate high | Major | More than 5% of API requests return 5xx for 5 minutes |
 | Pod scheduling SLO | Warning | Fewer than 99% of the pods scheduled in the last hour got a node within 5 s (needs at least 20 pods in the hour) |
 
