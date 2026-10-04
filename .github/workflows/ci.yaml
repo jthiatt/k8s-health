@@ -83,8 +83,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
-      - run: terraform fmt -check
+      - run: terraform fmt -check -recursive -diff
       - run: terraform init -backend=false && terraform validate
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --init --config=$GITHUB_WORKSPACE/.tflint.hcl && tflint --config=$GITHUB_WORKSPACE/.tflint.hcl --format=compact
+        env:
+          GITHUB_TOKEN: ${{ github.token }}  # tflint --init downloads its ruleset from GitHub
 
   images:
     needs: [test, chart]

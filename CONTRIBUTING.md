@@ -22,7 +22,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.2.1 --verify=false   # once
 helm unittest charts/k8s-health
 helm lint charts/k8s-health --set clusterName=dev
-(cd splunk && terraform fmt -check && terraform init -backend=false && terraform validate)
+(cd splunk && terraform fmt -check -recursive && terraform init -backend=false && terraform validate && tflint --init --config=../.tflint.hcl && tflint --config=../.tflint.hcl)
 ```
 
 **Code coverage:** the agent and the status page must each keep **at least 90% line coverage**. Current numbers are in the README badges, and the line-by-line reports are at https://jthiatt.github.io/k8s-health/. The bar is `fail_under` in `pyproject.toml`, and CI fails below that. Add or extend a test with every change. The tests use pytest and stub the Kubernetes API, Splunk API and HTTP calls, so they run offline in about a second.
