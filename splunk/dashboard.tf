@@ -224,6 +224,15 @@ resource "signalfx_time_chart" "prometheus_failures" {
   plot_type    = "LineChart"
 }
 
+resource "signalfx_time_chart" "istio" {
+  name         = "Istio: connected proxies and config rejects"
+  program_text = <<-EOF
+    data('pilot_xds', filter=filter('service', 'istio')).sum(by=['cluster']).publish('connected proxies')
+    data('pilot_total_xds_rejects', filter=filter('service', 'istio'), rollup='delta').sum(by=['cluster', 'type']).publish('rejects')
+  EOF
+  plot_type    = "LineChart"
+}
+
 # --- Dashboard -----------------------------------------------------------------------------------
 
 resource "signalfx_dashboard" "cluster_health" {
@@ -406,6 +415,13 @@ resource "signalfx_dashboard" "cluster_health" {
     chart_id = signalfx_time_chart.prometheus_failures.id
     row      = 9
     column   = 8
+    width    = 4
+    height   = 1
+  }
+  chart {
+    chart_id = signalfx_time_chart.istio.id
+    row      = 10
+    column   = 0
     width    = 4
     height   = 1
   }

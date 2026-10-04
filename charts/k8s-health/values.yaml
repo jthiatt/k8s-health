@@ -178,6 +178,22 @@ agent:
           aggregate: {alertmanager_notifications_failed_total: [integration]}
           min: {alertmanager_config_last_reload_successful: 1}
 
+    # istiod and every gateway installed from Istio's charts (labeled part-of=istio), in any namespace.
+    istio:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, selector: app.kubernetes.io/part-of=istio}
+      metricsChecks:
+        - metrics: {selector: app=istiod, port: 15014}
+          forward:
+            - pilot_xds                        # connected proxies, by version
+            - pilot_total_xds_rejects          # config proxies refused (appears once non-zero)
+            - pilot_total_xds_internal_errors
+            - pilot_xds_push_context_errors
+            - pilot_xds_pushes
+            - citadel_server_root_cert_expiry_seconds  # time left on the mesh root CA
+
     metrics-server:
       enabled: auto
       checks:

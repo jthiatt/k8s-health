@@ -144,6 +144,7 @@ Every check reports `k8s.health.up` = 1 (pass) or 0 (fail), with the dimensions 
 | traefik | `traefik/traefik` | :9100, on | pod can't be scraped | minikube (chart 41.6, Traefik v3.7) |
 | external-secrets | controller, webhook, cert-controller | :8080, on | any ClusterSecretStore not Ready | minikube (chart 2.11) |
 | prometheus | kube-prometheus-stack: Prometheus Operator, Prometheus, Alertmanager, kube-state-metrics, node-exporter, found by label **in any namespace** (names include the release name). Turned off a part? Override `checks`. | Prometheus :9090 and Alertmanager :9093, on; rule-evaluation and notification failures **aggregated** | Prometheus or Alertmanager config failed to reload | minikube (chart 91.9, Prometheus 3.15) |
+| istio | istiod and every gateway from Istio's charts (labeled `app.kubernetes.io/part-of=istio`), **in any namespace** | istiod :15014, on | none beyond readiness; config rejects and root CA expiry are alerts | minikube (Istio 1.30) |
 | metrics-server | `kube-system/metrics-server`, and the `v1beta1.metrics.k8s.io` APIService is Available | none (its metrics need client auth) | the metrics API isn't served, which breaks HPAs and `kubectl top` | minikube (chart 3.14, v0.9) |
 | cert-manager | controller, cainjector, webhook in `cert-manager` | controller :9402, on | pod can't be scraped | minikube (chart v1.21) |
 | external-dns | `external-dns/external-dns` | :7979, on | no successful sync in 10 minutes | minikube (chart 1.23) |
@@ -266,6 +267,8 @@ These rules have no recipients by default, so they only raise incidents, which t
 | fluentd output failing | Warning | An output has been retrying for 10 minutes (needs fluentd's output monitor) |
 | Kyverno policy errors | Warning | Kyverno's policy engine returns `error` results every minute for 10 minutes |
 | Certificate expiring | Major | A cert-manager Certificate expires in under 14 days, for an hour (renewal normally happens 30 days before) |
+| Istio root certificate expiring | Critical | The mesh root CA expires in under 30 days, for an hour |
+| Istio config rejected by proxies | Major | Any Envoy proxy rejected config from istiod in the last 15 minutes |
 | Alertmanager notifications failing | Major | An Alertmanager integration (Slack, PagerDuty, ...) has failures every minute for 10 minutes |
 | Prometheus rule evaluation failing | Warning | Prometheus rule evaluations fail every minute for 10 minutes |
 | Certificate not ready | Warning | A cert-manager Certificate has been not Ready for 15 minutes |
