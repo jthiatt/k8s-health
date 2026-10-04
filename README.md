@@ -167,7 +167,7 @@ Everything is in [`charts/k8s-health/values.yaml`](charts/k8s-health/values.yaml
 | `agent.profiles.<name>.metrics` | per profile | Also scrape the component's `/metrics`. |
 | `agent.profiles.<name>.checks` | per profile | Override when your install uses other names or namespaces. |
 | `agent.extraServices` | `{}` | Your own services, using the check syntax below. |
-| `agent.antiAffinity` | `soft` | `hard` refuses to put two replicas on one node. |
+| `agent.antiAffinity` | `soft` | `hard` refuses to put two replicas on one node, so it needs at least `agent.replicas` nodes; extra replicas stay Pending. |
 | `statusPage.*` | disabled | `enabled`, `splunk.realm`, `splunk.existingSecret` (or `splunk.apiToken`), `title`, `ingress`, `detectorMatch`. |
 
 **Use `enabled: true`, not `auto`, for components you must be alerted about.** In auto mode, if every workload of a component disappears, the agent assumes it was uninstalled and stops reporting it rather than reporting it down.
@@ -264,15 +264,16 @@ The JSON behind the page is at `/api/status`.
 
 The agent runs **3 replicas** by default. They elect a leader through a Kubernetes **Lease** (named `<release>-agent`), the same mechanism client-go's leader election uses. Only the leader runs checks.
 
-- **Leader's node dies, or loses the API server:** it stops acting 20 seconds after its last renewal, and a standby takes over when the 30-second Lease expires. Updates to the Lease are compare-and-swap, so two leaders never overlap.
+- **Leader's node dies, or loses the API server:** it stops acting 20 seconds after its last renewal, and a standby takes over once the 30-second Lease has expired. Standbys retry every 10 seconds, so that's at most about 40 seconds. Updates to the Lease are compare-and-swap, so two leaders never overlap.
 - **Leader can't reach its node's collector:** after 3 failed sends in a row it steps down for 60 seconds, so a replica on another node takes over.
 - **Rollouts:** on shutdown the leader releases the Lease, so a standby takes over within seconds.
 - **Probes:** `/readyz` passes while the API server answers. `/healthz` fails if the election loop stops or a check cycle hangs, which restarts the pod.
 - **Placement:** preferred one replica per node (`agent.antiAffinity`), spread across zones, and a PodDisruptionBudget (`maxUnavailable: 1`).
+- **Rollouts** replace one pod at a time without adding an extra one (`maxSurge: 0`), so upgrades also work with `antiAffinity: hard` on a cluster that has exactly as many nodes as replicas.
 
 **Tested on minikube:**
 - **Graceful handover:** 1 to 2 seconds.
-- **Frozen leader:** replaced in 23 to 28 seconds, then restarted by its liveness probe after about 65 seconds.
+- **Frozen leader:** replaced in 23 to 33 seconds, then restarted by its liveness probe after 65 to 75 seconds.
 - **Data:** no gap in Splunk beyond one normal interval.
 
 ## Troubleshooting

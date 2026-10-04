@@ -8,6 +8,12 @@ metadata:
     app.kubernetes.io/component: agent
 spec:
   replicas: {{ .Values.agent.replicas }}
+  # Replace one pod at a time, never adding an extra one: with antiAffinity=hard and as many nodes as
+  # replicas, a surge pod would have nowhere to go and every upgrade would hang. Losing a standby for a
+  # moment is harmless (leadership hands over in seconds).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
   selector:
     matchLabels: {{- $selector | nindent 6 }}
   template:
