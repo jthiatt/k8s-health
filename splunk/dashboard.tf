@@ -1,16 +1,16 @@
-# EKS health dashboard. Core charts use eks.health.up; the second section charts the series the agent
+# Cluster health dashboard. Core charts use var.metric_name; the second section charts the series the agent
 # forwards from each service (empty until that service runs in a cluster).
 # The collector adds host dims (host.name, k8s.node.name, ...) that change when the agent pod moves node,
 # so every chart aggregates by cluster/service/check rather than using raw series.
 
 locals {
   # Latest value per check; 1 = up, 0 = down.
-  checks = "data('eks.health.up', rollup='latest').min(by=['cluster', 'service', 'check'])"
+  checks = "data('${var.metric_name}', rollup='latest').min(by=['cluster', 'service', 'check'])"
 }
 
-resource "signalfx_dashboard_group" "eks" {
-  name        = "EKS"
-  description = "EKS cluster health, from eks-health-agent"
+resource "signalfx_dashboard_group" "main" {
+  name        = var.name_prefix
+  description = "Kubernetes cluster health, from the k8s-health agent"
 }
 
 # --- Core health ---------------------------------------------------------------------------------
@@ -18,7 +18,7 @@ resource "signalfx_dashboard_group" "eks" {
 resource "signalfx_single_value_chart" "clusters" {
   name          = "Clusters reporting"
   description   = "Clusters whose agent sent data in the current window"
-  program_text  = "data('eks.health.up').max(by=['cluster']).count().publish('clusters')"
+  program_text  = "data('${var.metric_name}').max(by=['cluster']).count().publish('clusters')"
   max_precision = 3
 }
 
@@ -31,7 +31,7 @@ resource "signalfx_single_value_chart" "checks" {
 resource "signalfx_single_value_chart" "services_down" {
   name          = "Services down"
   description   = "Services with at least one failing check"
-  program_text  = "(1 - data('eks.health.up', rollup='latest').min(by=['cluster', 'service'])).sum().publish('services down')"
+  program_text  = "(1 - data('${var.metric_name}', rollup='latest').min(by=['cluster', 'service'])).sum().publish('services down')"
   max_precision = 3
   color_by      = "Scale"
   color_scale {
@@ -62,7 +62,7 @@ resource "signalfx_single_value_chart" "checks_down" {
 resource "signalfx_heatmap_chart" "service_health" {
   name         = "Service health by cluster"
   description  = "Green = every check up, red = at least one check down, empty = not reporting"
-  program_text = "data('eks.health.up', rollup='latest').min(by=['cluster', 'service']).publish('health')"
+  program_text = "data('${var.metric_name}', rollup='latest').min(by=['cluster', 'service']).publish('health')"
   group_by     = ["cluster"]
   color_scale {
     gte   = 1
@@ -84,7 +84,7 @@ resource "signalfx_list_chart" "failing_checks" {
 resource "signalfx_time_chart" "availability" {
   name         = "Service availability"
   description  = "Worst check per service over time (1 = up, 0 = down)"
-  program_text = "data('eks.health.up').min(by=['cluster', 'service']).publish('up')"
+  program_text = "data('${var.metric_name}').min(by=['cluster', 'service']).publish('up')"
   plot_type    = "LineChart"
   axis_left {
     min_value = 0
@@ -95,7 +95,7 @@ resource "signalfx_time_chart" "availability" {
 resource "signalfx_time_chart" "checks_per_cluster" {
   name         = "Checks reporting per cluster"
   description  = "A drop to zero means that cluster's agent (or its node's collector) stopped sending"
-  program_text = "data('eks.health.up').count(by=['cluster']).publish('checks')"
+  program_text = "data('${var.metric_name}').count(by=['cluster']).publish('checks')"
   plot_type    = "LineChart"
 }
 
@@ -151,10 +151,10 @@ resource "signalfx_time_chart" "karpenter_usage" {
 
 # --- Dashboard -----------------------------------------------------------------------------------
 
-resource "signalfx_dashboard" "eks_health" {
-  name            = "EKS health"
-  description     = "Core service health from eks-health-agent. Use the Cluster filter to focus on one cluster."
-  dashboard_group = signalfx_dashboard_group.eks.id
+resource "signalfx_dashboard" "cluster_health" {
+  name            = "Cluster health"
+  description     = "Core service health from the k8s-health agent. Use the Cluster filter to focus on one cluster."
+  dashboard_group = signalfx_dashboard_group.main.id
   time_range      = "-3h"
 
   variable {

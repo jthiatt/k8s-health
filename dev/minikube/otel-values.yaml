@@ -1,0 +1,27 @@
+# Splunk OTel Collector for local minikube development (chart splunk-otel-collector 0.161.0). Chart defaults
+# plus two minikube workarounds, so the agent reaches the node-local collector exactly as on a real cluster
+# (OTLP/HTTP on the node IP, port 4318). On a real cluster you'd normally also set `distribution` and
+# `cloudProvider` (see the collector chart's docs).
+clusterName: minikube
+splunkObservability:
+  realm: us1  # your realm
+  metricsEnabled: true
+  tracesEnabled: false
+# Token comes from a pre-created Secret (key: splunk_observability_access_token) so it never lands in git.
+secret:
+  create: false
+  name: splunk-otel-collector
+  validateSecret: false
+agent:
+  # minikube-only: the kubelet serving cert has no IP SAN, so TLS verification of ${K8S_NODE_IP}:10250 fails.
+  # Managed clusters' kubelet certs normally include the node IP: don't copy this to them.
+  config:
+    receivers:
+      kubelet_stats:
+        insecure_skip_verify: true
+  # minikube binds these to 127.0.0.1. (On managed clusters the control plane often isn't reachable at all.)
+  controlPlaneMetrics:
+    controllerManager:
+      enabled: false
+    scheduler:
+      enabled: false

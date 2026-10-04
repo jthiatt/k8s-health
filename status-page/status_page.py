@@ -1,4 +1,4 @@
-"""EKS status page (Flask): reads `eks.health.up` and detector incidents from the Splunk API.
+"""k8s-health status page (Flask): reads the agents' `k8s.health.up` and detector incidents from the Splunk API.
 A check with no datapoint within STALE_AFTER_SECONDS is stale (the agent missed its interval)."""
 import math
 import os
@@ -17,11 +17,13 @@ APP = f"https://app.{REALM}.observability.splunkcloud.com"
 TOKEN = os.environ.get("SPLUNK_API_TOKEN", "")
 INTERVAL = int(os.environ.get("INTERVAL_SECONDS", "60"))
 STALE_AFTER = int(os.environ.get("STALE_AFTER_SECONDS", str(3 * INTERVAL)))
-DETECTOR_MATCH = os.environ.get("DETECTOR_MATCH", "").lower()  # substring of detector name; "" = all
+DETECTOR_MATCH = os.environ.get("DETECTOR_MATCH", "k8s-health").lower()  # substring of detector names; "" = all
+PAGE_TITLE = os.environ.get("PAGE_TITLE", "Cluster status")
+METRIC = os.environ.get("METRIC_NAME", "k8s.health.up")  # must match the agents
 HISTORY_DAYS = int(os.environ.get("HISTORY_DAYS", "30"))
 INCIDENT_DAYS = int(os.environ.get("INCIDENT_DAYS", "7"))
 CACHE_SECONDS, HISTORY_CACHE_SECONDS = 30, 600
-QUERY = 'sf_metric:"eks.health.up"'
+QUERY = f'sf_metric:"{METRIC}"'
 RANK = {"down": 0, "stale": 1, "up": 2}
 HOUR, DAY = 3_600_000, 86_400_000
 
@@ -209,7 +211,7 @@ def api_status():
 @app.get("/")
 def index():
     return render_template("index.html", s=status(), interval=INTERVAL, stale_after=STALE_AFTER,
-                           days=HISTORY_DAYS, incident_days=INCIDENT_DAYS)
+                           days=HISTORY_DAYS, incident_days=INCIDENT_DAYS, title=PAGE_TITLE, metric=METRIC)
 
 
 if __name__ == "__main__":  # local dev; the container runs gunicorn

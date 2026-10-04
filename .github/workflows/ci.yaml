@@ -1,0 +1,102 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Agent tests (standard library only)
+        run: python agent/test_agent.py
+      - name: Status page tests
+        working-directory: status-page
+        run: |
+          pip install -r requirements.txt
+          python test_status_page.py
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint charts/k8s-health --set clusterName=ci
+      - name: Render with every component on
+        run: >
+          helm template ci charts/k8s-health --set clusterName=ci
+          --set statusPage.enabled=true --set statusPage.splunk.realm=us1 --set statusPage.splunk.apiToken=x
+          --set statusPage.ingress.enabled=true --set 'statusPage.ingress.hosts[0]=status.example.com'
+          --set agent.antiAffinity=hard > /dev/null
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: splunk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check
+      - run: terraform init -backend=false && terraform validate
+
+  images:
+    needs: [test, chart]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [agent, status-page]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/k8s-health-${{ matrix.component }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha
+            type=edge,branch=main
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.component }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  chart-release:
+    needs: [images, terraform]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Package and push the chart as an OCI artifact
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          helm package charts/k8s-health --version "$version" --app-version "$version"
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push "k8s-health-$version.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"

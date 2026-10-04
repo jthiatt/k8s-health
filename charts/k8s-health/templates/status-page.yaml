@@ -1,0 +1,101 @@
+{{- if .Values.statusPage.enabled }}
+{{- $sp := .Values.statusPage }}
+{{- $selector := include "k8s-health.selectorLabels" (list . "status-page") }}
+{{- $secretName := $sp.splunk.existingSecret | default (include "k8s-health.statusPageName" .) }}
+{{- if not (or $sp.splunk.apiToken $sp.splunk.existingSecret) }}{{ fail "statusPage needs a Splunk API token: set statusPage.splunk.apiToken or statusPage.splunk.existingSecret" }}{{ end }}
+{{- if $sp.splunk.apiToken }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "k8s-health.statusPageName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  {{ $sp.splunk.existingSecretKey }}: {{ $sp.splunk.apiToken | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "k8s-health.statusPageName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+    app.kubernetes.io/component: status-page
+spec:
+  # One replica: Splunk API responses are cached in-process, so more replicas multiply the API calls.
+  replicas: 1
+  selector:
+    matchLabels: {{- $selector | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- $selector | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534}
+      {{- with $sp.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sp.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: page
+          image: {{ include "k8s-health.image" (list $sp.image .) }}
+          imagePullPolicy: {{ $sp.image.pullPolicy }}
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: SPLUNK_REALM, value: {{ required "statusPage.splunk.realm is required (e.g. us1)" $sp.splunk.realm | quote }}}
+            - name: SPLUNK_API_TOKEN
+              valueFrom: {secretKeyRef: {name: {{ $secretName }}, key: {{ $sp.splunk.existingSecretKey }}}}
+            - {name: INTERVAL_SECONDS, value: {{ .Values.intervalSeconds | quote }}}
+            - {name: METRIC_NAME, value: {{ .Values.metricName | quote }}}
+            - {name: PAGE_TITLE, value: {{ $sp.title | quote }}}
+            - {name: DETECTOR_MATCH, value: {{ $sp.detectorMatch | quote }}}
+            - {name: HISTORY_DAYS, value: {{ $sp.historyDays | quote }}}
+            - {name: INCIDENT_DAYS, value: {{ $sp.incidentDays | quote }}}
+          readinessProbe: {httpGet: {path: /healthz, port: http}}
+          livenessProbe: {httpGet: {path: /healthz, port: http}}
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {{- toYaml $sp.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "k8s-health.statusPageName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+spec:
+  type: {{ $sp.service.type }}
+  selector: {{- $selector | nindent 4 }}
+  ports:
+    - {name: http, port: {{ $sp.service.port }}, targetPort: http}
+{{- if $sp.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "k8s-health.statusPageName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+  {{- with $sp.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $sp.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $sp.ingress.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range $sp.ingress.hosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "k8s-health.statusPageName" $ }}
+                port: {name: http}
+    {{- end }}
+{{- end }}
+{{- end }}

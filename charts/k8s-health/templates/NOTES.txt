@@ -1,0 +1,20 @@
+k8s-health is installed in namespace {{ .Release.Namespace }} for cluster "{{ .Values.clusterName }}".
+{{- if .Values.agent.enabled }}
+
+Agent ({{ .Values.agent.replicas }} replicas, one leader):
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=agent
+  kubectl -n {{ .Release.Namespace }} get lease {{ include "k8s-health.agentName" . }}          # HOLDER = the leader
+  kubectl -n {{ .Release.Namespace }} logs $(kubectl -n {{ .Release.Namespace }} get lease {{ include "k8s-health.agentName" . }} -o jsonpath='{.spec.holderIdentity}')
+
+The leader's first log lines list which services it reports. Within a minute or two, look for
+{{ .Values.metricName }} with cluster={{ .Values.clusterName }} in Splunk's Metric Finder.
+{{- end }}
+{{- if .Values.statusPage.enabled }}
+
+Status page:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "k8s-health.statusPageName" . }} 8080:{{ .Values.statusPage.service.port }}
+  then open http://localhost:8080. It has no login of its own; don't expose it publicly without auth.
+{{- end }}
+
+Alerts (dead man's switch, service down) and the dashboard are created separately, with the
+Terraform in splunk/: see https://github.com/jthiatt/k8s-health#4-create-the-alerts-and-dashboard

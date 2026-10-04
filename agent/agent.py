@@ -1,6 +1,6 @@
-"""EKS core-service health agent: every INTERVAL_SECONDS runs the checks in checks.json and pushes
-one `eks.health.up` gauge (1/0) per check, dims: cluster, service, check, over OTLP/HTTP (JSON) to
-the node-local Splunk OTel Collector. `metrics` checks also forward selected Prometheus series.
+"""k8s-health agent: every INTERVAL_SECONDS runs the checks in CHECKS_FILE and pushes one `k8s.health.up`
+gauge (1/0) per check, dims: cluster, service, check, over OTLP/HTTP (JSON) to the node-local Splunk OTel
+Collector. `metrics` checks also forward selected Prometheus series.
 
 Runs as several replicas; a Kubernetes Lease elects the one that collects. The others stand by and
 take over if the leader's node breaks (it stops renewing) or can't reach its collector (it steps down)."""
@@ -21,11 +21,11 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
-METRIC = "eks.health.up"
+METRIC = os.environ.get("METRIC_NAME", "k8s.health.up")
 PATHS = {"deployment": "deployments", "statefulset": "statefulsets", "daemonset": "daemonsets"}
 PROM_LINE = re.compile(r"^([a-zA-Z_:][\w:]*)(?:\{(.*)\})?\s+(\S+)")
 PROM_LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
-LEASE = "eks-health-agent"
+LEASE = os.environ.get("LEASE_NAME", "k8s-health-agent")  # one per install; the Helm chart sets it
 LEASE_SECONDS = int(os.environ.get("LEASE_DURATION_SECONDS", "30"))  # a dead leader is replaced after this
 RENEW_SECONDS = 10  # how often every replica tries to acquire/renew
 SEND_FAILURES_TO_STEP_DOWN = 3  # consecutive failed sends to this node's collector
@@ -44,14 +44,14 @@ def bracket(host):
     return f"[{host}]" if ":" in host else host  # IPv6
 
 
-def k8s(path, method="GET", body=None):
+def k8s(path, method="GET", body=None, raw=False):
     # Talk to the API by IP, not kubernetes.default.svc, so a CoreDNS outage doesn't fail every check.
     url = f"https://{bracket(os.environ['KUBERNETES_SERVICE_HOST'])}:{os.environ['KUBERNETES_SERVICE_PORT']}{path}"
     with open(f"{SA}/token") as f:  # re-read: projected tokens rotate
         req = urllib.request.Request(url, method=method, data=None if body is None else json.dumps(body).encode(),
                                      headers={"Authorization": "Bearer " + f.read(), "Content-Type": "application/json"})
     with urllib.request.urlopen(req, context=ssl.create_default_context(cafile=f"{SA}/ca.crt"), timeout=5) as r:
-        return json.load(r)
+        return r.read().decode() if raw else json.load(r)
 
 
 def parse_prom(text):
@@ -126,6 +126,19 @@ def scrape(c, out):
         raise RuntimeError("; ".join(bad))
 
 
+def not_ready_nodes(nodes, now, ignore_younger_than):
+    """Names of nodes whose Ready condition isn't True, skipping nodes still joining (autoscaler churn)."""
+    bad = []
+    for n in nodes:
+        created = datetime.strptime(n["metadata"]["creationTimestamp"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        if now - created.timestamp() < ignore_younger_than:
+            continue
+        ready = next((x.get("status") for x in n.get("status", {}).get("conditions", []) if x.get("type") == "Ready"), "Unknown")
+        if ready != "True":
+            bad.append(n["metadata"]["name"])
+    return bad
+
+
 def run_check(c, out):
     """Raises if the check fails. Metrics checks append forwarded series to out."""
     if "metrics" in c:
@@ -133,12 +146,25 @@ def run_check(c, out):
     if "dns" in c:
         socket.getaddrinfo(c["dns"], 443)
         return
+    if "apiserver" in c:
+        k8s(c["apiserver"], raw=True)  # e.g. /readyz: 200 "ok", or an HTTPError
+        return
+    if "nodes" in c:
+        opts = c["nodes"] or {}
+        bad = not_ready_nodes(k8s("/api/v1/nodes")["items"], time.time(), opts.get("ignore_younger_than_seconds", 300))
+        if len(bad) > opts.get("max_not_ready", 0):
+            raise RuntimeError(f"{len(bad)} node(s) not Ready: {', '.join(bad[:10])}")
+        return
     obj = k8s(f"/apis/apps/v1/namespaces/{c['namespace']}/{PATHS[c['kind']]}/{c['name']}")
     if not ready(c["kind"], obj):
         raise RuntimeError(f"not ready: {obj.get('status')}")
 
 
 def label_of(c):
+    if "apiserver" in c:
+        return f"apiserver{c['apiserver']}"
+    if "nodes" in c:
+        return "nodes/ready"
     if "metrics" in c:
         t = c["metrics"]
         return f"metrics/{t['url']}" if "url" in t else f"metrics/{t['namespace']}/{t['selector']}"
@@ -158,7 +184,7 @@ def otlp(points, ts_ns):
         points_list.append({"timeUnixNano": str(ts_ns), "asDouble": float(value),
                             "attributes": [{"key": k, "value": {"stringValue": str(v)}} for k, v in dims.items()]})
     return {"resourceMetrics": [{"resource": {}, "scopeMetrics": [
-        {"scope": {"name": "eks-health-agent"}, "metrics": list(metrics.values())}]}]}
+        {"scope": {"name": "k8s-health-agent"}, "metrics": list(metrics.values())}]}]}
 
 
 def log(level, msg, **kw):
@@ -264,19 +290,38 @@ class Elector:
             time.sleep(RENEW_SECONDS)
 
 
-def collect(checks, cluster):
+def is_missing(err):
+    return isinstance(err, urllib.error.HTTPError) and err.code == 404
+
+
+def collect(services, cluster, absent):
+    """Run every service's checks -> datapoints. A service in mode "auto" whose workload checks all 404
+    isn't installed in this cluster: it's skipped (no datapoints) until one of its workloads appears.
+    `absent` carries that state between cycles so the change is logged once."""
     points = []
-    for service, items in checks.items():
-        for c in items:
+    for service, spec in services.items():
+        results = []
+        for c in spec["checks"]:
             extra = []
             try:
                 run_check(c, extra)
-                up = 1
+                results.append((c, None, extra))
             except Exception as e:
-                up = 0
-                print(json.dumps({"level": "warn", "service": service, "check": label_of(c), "error": str(e)}), flush=True)
-            base = {"cluster": cluster, "service": service}
-            points.append((METRIC, up, {**base, "check": label_of(c)}, "gauge"))
+                results.append((c, e, extra))
+        workloads = [err for c, err, _ in results if "kind" in c]
+        if spec.get("mode") == "auto" and workloads and all(is_missing(err) for err in workloads):
+            if service not in absent:
+                log("info", "not installed, skipping (mode auto)", service=service)
+                absent.add(service)
+            continue
+        if service in absent:
+            log("info", "now installed, reporting", service=service)
+            absent.discard(service)
+        base = {"cluster": cluster, "service": service}
+        for c, err, extra in results:
+            if err:
+                log("warn", "check failed", service=service, check=label_of(c), error=str(err))
+            points.append((METRIC, 0 if err else 1, {**base, "check": label_of(c)}, "gauge"))
             points += [(name, value, {**dims, **base}, typ) for name, value, dims, typ in extra]
     return points
 
@@ -327,13 +372,16 @@ def main():
     interval = int(os.environ.get("INTERVAL_SECONDS", "60"))
     # Default: OTLP/HTTP on the Splunk OTel Collector agent on this node (hostNetwork, :4318); it adds its own token.
     endpoint = os.environ.get("OTLP_ENDPOINT") or f"http://{bracket(os.environ['SPLUNK_OTEL_AGENT'])}:4318"
-    with open(os.environ.get("CHECKS_FILE", "/app/checks.json")) as f:
-        checks = json.load(f)
+    with open(os.environ.get("CHECKS_FILE", "/etc/k8s-health/checks.json")) as f:
+        services = json.load(f)["services"]
     with open(f"{SA}/namespace") as f:
         namespace = f.read().strip()
 
     elector = Elector(namespace, os.environ.get("POD_NAME") or socket.gethostname())
     state = {"cycle_since": 0.0}
+    absent = set()
+    log("info", "starting", cluster=cluster, identity=elector.identity, lease=LEASE, metric=METRIC,
+        services={name: spec.get("mode", "always") for name, spec in services.items()})
 
     def shutdown(*_):
         # As PID 1, Python ignores SIGTERM without a handler. Hand the lease over so a standby takes over
@@ -351,7 +399,7 @@ def main():
             start = time.time()
             next_run = start + interval
             state["cycle_since"] = start
-            ok = send(endpoint, collect(checks, cluster), start)
+            ok = send(endpoint, collect(services, cluster, absent), start)
             state["cycle_since"] = 0.0
             failures = 0 if ok else failures + 1
             if failures >= SEND_FAILURES_TO_STEP_DOWN:

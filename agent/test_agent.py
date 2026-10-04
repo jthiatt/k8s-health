@@ -1,10 +1,12 @@
 import copy
 import threading
+import time
 import urllib.error
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import agent
-from agent import LEASE_SECONDS, Elector, matches, otlp, parse_prom, ready, scrape
+from agent import LEASE_SECONDS, Elector, collect, matches, not_ready_nodes, otlp, parse_prom, ready, scrape
 
 PROM = """# HELP workqueue_depth Current depth
 # TYPE workqueue_depth gauge
@@ -76,11 +78,11 @@ assert not ready("deployment", {"spec": {"replicas": 0}, "status": {}})
 assert ready("daemonset", {"status": {"desiredNumberScheduled": 3, "numberReady": 3}})
 assert not ready("daemonset", {"status": {"desiredNumberScheduled": 3, "numberReady": 2}})
 # OTLP payload: one metric per name; counters as monotonic cumulative sums, the rest as gauges
-req = otlp([("eks.health.up", 1, {"cluster": "c1", "service": "coredns", "check": "dns/x."}, "gauge"),
-            ("eks.health.up", 0, {"cluster": "c1", "service": "coredns", "check": "deployment/kube-system/coredns"}, "gauge"),
+req = otlp([("k8s.health.up", 1, {"cluster": "c1", "service": "coredns", "check": "dns/x."}, "gauge"),
+            ("k8s.health.up", 0, {"cluster": "c1", "service": "coredns", "check": "deployment/kube-system/coredns"}, "gauge"),
             ("coredns_dns_requests_total", 42, {"cluster": "c1", "pod": "coredns-1"}, "cumulative_counter")], 1_700_000_000 * 10**9)
 metrics = {m["name"]: m for m in req["resourceMetrics"][0]["scopeMetrics"][0]["metrics"]}
-up = metrics["eks.health.up"]["gauge"]["dataPoints"]
+up = metrics["k8s.health.up"]["gauge"]["dataPoints"]
 assert [p["asDouble"] for p in up] == [1.0, 0.0] and up[0]["timeUnixNano"] == "1700000000000000000"
 assert {"key": "check", "value": {"stringValue": "dns/x."}} in up[0]["attributes"]
 counter = metrics["coredns_dns_requests_total"]["sum"]
@@ -144,4 +146,46 @@ assert c.is_leader(t3 + 3)
 c.release(now=t3 + 2 * LEASE_SECONDS + 2)
 a.tick(t3 + 2 * LEASE_SECONDS + 3)  # a's hold-off is over
 assert a.is_leader(t3 + 2 * LEASE_SECONDS + 3)
+
+# Universal checks and auto-mode services, against a fake cluster
+NOW = time.time()
+
+
+def node(name, ready, age_s):
+    created = datetime.fromtimestamp(NOW - age_s, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"metadata": {"name": name, "creationTimestamp": created}, "status": {"conditions": [{"type": "Ready", "status": ready}]}}
+
+
+# NotReady counts; a node still joining (younger than the grace period) is ignored even if not Ready yet
+assert not_ready_nodes([node("a", "True", 3600), node("b", "False", 3600), node("c", "Unknown", 60)], NOW, 300) == ["b"]
+
+objects = {"/readyz": "ok",
+           "/api/v1/nodes": {"items": [node("n1", "True", 3600), node("n2", "False", 3600)]},
+           "/apis/apps/v1/namespaces/kube-system/deployments/coredns": {"spec": {"replicas": 2}, "status": {"readyReplicas": 2}}}
+
+
+def cluster_api(path, method="GET", body=None, raw=False):
+    if path not in objects:
+        raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+    return objects[path]
+
+
+agent.k8s = cluster_api
+services = {
+    "kubernetes": {"mode": "always", "checks": [{"apiserver": "/readyz"}, {"nodes": {"max_not_ready": 0}}]},
+    "coredns": {"mode": "auto", "checks": [{"kind": "deployment", "namespace": "kube-system", "name": "coredns"}]},
+    "cilium": {"mode": "auto", "checks": [{"kind": "daemonset", "namespace": "kube-system", "name": "cilium"}]},
+    "argocd": {"mode": "always", "checks": [{"kind": "deployment", "namespace": "argocd", "name": "argocd-server"}]},
+}
+absent = set()
+up = lambda: {(d["service"], d["check"]): v for name, v, d, _ in collect(services, "c1", absent) if name == agent.METRIC}  # noqa: E731
+got = up()
+assert got == {("kubernetes", "apiserver/readyz"): 1, ("kubernetes", "nodes/ready"): 0,  # n2 NotReady > max 0
+               ("coredns", "deployment/kube-system/coredns"): 1,
+               ("argocd", "deployment/argocd/argocd-server"): 0}, got  # "always": missing workload is down
+assert absent == {"cilium"}  # "auto" and not installed: skipped entirely, no datapoints
+services["kubernetes"]["checks"][1]["nodes"]["max_not_ready"] = 1
+assert up()[("kubernetes", "nodes/ready")] == 1  # one NotReady node is within the allowance
+objects["/apis/apps/v1/namespaces/kube-system/daemonsets/cilium"] = {"status": {"desiredNumberScheduled": 2, "numberReady": 1}}
+assert up()[("cilium", "daemonset/kube-system/cilium")] == 0 and absent == set()  # installed later: reported, and down
 print("ok")

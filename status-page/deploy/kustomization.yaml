@@ -1,7 +1,0 @@
-namespace: eks-status
-resources:
-  - status-page.yaml
-images:
-  - name: eks-status-page
-    newName: <your-registry>/eks-status-page  # e.g. <account>.dkr.ecr.<region>.amazonaws.com/eks-status-page
-    newTag: "0.1.0"

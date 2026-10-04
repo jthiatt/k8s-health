@@ -1,0 +1,98 @@
+{{- if .Values.agent.enabled }}
+{{- $selector := include "k8s-health.selectorLabels" (list . "agent") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "k8s-health.agentName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+spec:
+  replicas: {{ .Values.agent.replicas }}
+  selector:
+    matchLabels: {{- $selector | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- $selector | nindent 8 }}
+      annotations:
+        checksum/checks: {{ include (print $.Template.BasePath "/agent-configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "k8s-health.agentName" . }}
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534}
+      {{- with .Values.agent.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          {{- $term := dict "topologyKey" "kubernetes.io/hostname" "labelSelector" (dict "matchLabels" ($selector | fromYaml)) }}
+          {{- if eq .Values.agent.antiAffinity "hard" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - {{- toYaml $term | nindent 14 }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm: {{- toYaml $term | nindent 16 }}
+          {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- $selector | nindent 14 }}
+      {{- with .Values.agent.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.agent.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agent
+          image: {{ include "k8s-health.image" (list .Values.agent.image .) }}
+          imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
+          env:
+            - {name: CLUSTER_NAME, value: {{ required "clusterName is required (unique per cluster)" .Values.clusterName | quote }}}
+            - {name: INTERVAL_SECONDS, value: {{ .Values.intervalSeconds | quote }}}
+            - {name: METRIC_NAME, value: {{ .Values.metricName | quote }}}
+            - {name: LEASE_NAME, value: {{ include "k8s-health.agentName" . | quote }}}
+            - {name: LEASE_DURATION_SECONDS, value: {{ .Values.agent.leaseDurationSeconds | quote }}}
+            - {name: CHECKS_FILE, value: /etc/k8s-health/checks.json}
+            {{- if .Values.agent.otlpEndpoint }}
+            - {name: OTLP_ENDPOINT, value: {{ .Values.agent.otlpEndpoint | quote }}}
+            {{- else }}
+            - name: SPLUNK_OTEL_AGENT  # node IP; the Splunk OTel Collector agent serves OTLP/HTTP on :4318 there
+              valueFrom: {fieldRef: {fieldPath: status.hostIP}}
+            {{- end }}
+            - name: POD_NAME  # leader election identity
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          ports:
+            - {name: health, containerPort: 8080}
+          # Ready = the API server answers (a replica that can't reach it can neither lead nor check).
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            periodSeconds: 5
+            failureThreshold: 2
+          # Live = the election loop is running and no check cycle has hung for 3 intervals.
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts: [{name: checks, mountPath: /etc/k8s-health}]
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          resources: {{- toYaml .Values.agent.resources | nindent 12 }}
+      volumes:
+        - name: checks
+          configMap: {name: {{ include "k8s-health.agentName" . }}}
+{{- if and .Values.agent.podDisruptionBudget.enabled (gt (int .Values.agent.replicas) 1) }}
+---
+# Voluntary disruptions (node drains, upgrades) take at most this many replicas at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "k8s-health.agentName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.agent.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels: {{- $selector | nindent 6 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,31 @@
+{{- if .Values.agent.enabled }}
+{{- /* Render the agent's checks file from core + profiles + extraServices. */ -}}
+{{- $core := .Values.agent.core -}}
+{{- $checks := list -}}
+{{- if $core.apiserver }}{{ $checks = append $checks (dict "apiserver" "/readyz") }}{{ end -}}
+{{- if $core.dns }}{{ $checks = append $checks (dict "dns" (printf "kubernetes.default.svc.%s." $core.clusterDomain)) }}{{ end -}}
+{{- range $core.extraDnsNames }}{{ $checks = append $checks (dict "dns" .) }}{{ end -}}
+{{- if $core.nodes.enabled }}{{ $checks = append $checks (dict "nodes" (dict "max_not_ready" $core.nodes.maxNotReady "ignore_younger_than_seconds" $core.nodes.ignoreYoungerThanSeconds)) }}{{ end -}}
+{{- $services := dict -}}
+{{- if $checks }}{{ $_ := set $services "kubernetes" (dict "mode" "always" "checks" $checks) }}{{ end -}}
+{{- range $name, $p := .Values.agent.profiles -}}
+{{- $enabled := toString $p.enabled -}}
+{{- if not (has $enabled (list "auto" "true" "false")) }}{{ fail (printf "agent.profiles.%s.enabled must be auto, true or false (got %s)" $name $enabled) }}{{ end -}}
+{{- if ne $enabled "false" -}}
+{{- $c := $p.checks | default list -}}
+{{- if $p.metrics }}{{ $c = concat $c ($p.metricsChecks | default list) }}{{ end -}}
+{{- $_ := set $services $name (dict "mode" (ternary "auto" "always" (eq $enabled "auto")) "checks" $c) -}}
+{{- end -}}
+{{- end -}}
+{{- range $name, $s := .Values.agent.extraServices -}}
+{{- $_ := set $services $name (dict "mode" (ternary "auto" "always" (eq (toString ($s.enabled | default true)) "auto")) "checks" $s.checks) -}}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "k8s-health.agentName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+data:
+  checks.json: |
+{{ dict "services" $services | toPrettyJson | indent 4 }}
+{{- end }}

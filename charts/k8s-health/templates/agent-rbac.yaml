@@ -1,0 +1,65 @@
+{{- if .Values.agent.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "k8s-health.agentName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+---
+# Read-only access to what the checks look at.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "k8s-health.agentName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, daemonsets]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods]  # metrics checks find pods by label selector
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+  - nonResourceURLs: [/readyz, /livez]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "k8s-health.agentName" . }}
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "k8s-health.agentName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "k8s-health.agentName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Leader election: the replicas share one Lease in the release namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "k8s-health.agentName" . }}-leader-election
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "k8s-health.agentName" . }}-leader-election
+  labels: {{- include "k8s-health.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "k8s-health.agentName" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "k8s-health.agentName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

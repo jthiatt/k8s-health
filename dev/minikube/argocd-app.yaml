@@ -2,7 +2,7 @@
 # guestbook example (kustomize variant, so the image can be overridden to break it on purpose).
 # Once Argo CD manages an app, the application-controller exports argocd_app_info / argocd_app_sync_total
 # and the repo-server makes git requests, which the agent forwards to Splunk.
-#   kubectl apply -f test/minikube/argocd-app.yaml
+#   kubectl apply -f dev/minikube/argocd-app.yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

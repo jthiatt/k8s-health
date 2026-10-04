@@ -1,0 +1,214 @@
+# -- Name of this cluster, sent as the `cluster` dimension. Required, and must be unique across the
+# clusters reporting to one Splunk org (the status page and dashboard group by it).
+clusterName: ""
+
+# -- How often the agent runs its checks. The status page uses the same value to decide when a check
+# is stale (3 intervals), so every cluster reporting to one status page should use the same interval.
+intervalSeconds: 60
+
+# -- Metric the agent sends and the status page reads. Only change it if you run more than one
+# k8s-health setup in the same Splunk org and want them kept apart.
+metricName: k8s.health.up
+
+agent:
+  enabled: true
+  image:
+    repository: ghcr.io/jthiatt/k8s-health-agent
+    tag: ""  # defaults to the chart's appVersion
+    pullPolicy: IfNotPresent
+
+  # -- Replicas elect one leader (a Kubernetes Lease) that runs the checks; the rest stand by and take
+  # over if its node fails. 1 works, but then a bad node stops all checks until the pod is rescheduled.
+  replicas: 3
+  leaseDurationSeconds: 30
+
+  # -- Where to send metrics (OTLP/HTTP). Empty = the Splunk OTel Collector agent on the pod's own node
+  # (http://<node IP>:4318), which the splunk-otel-collector chart runs by default. Set this if you use a
+  # gateway instead, e.g. http://splunk-otel-collector.<namespace>.svc:4318
+  otlpEndpoint: ""
+
+  # -- Universal checks, reported as service "kubernetes". Each applies to any conformant cluster.
+  core:
+    # API server /readyz
+    apiserver: true
+    # Resolve kubernetes.default.svc.<clusterDomain>. from the agent pod (exercises cluster DNS end to end)
+    dns: true
+    clusterDomain: cluster.local
+    # Extra names to resolve, e.g. an external name to test upstream DNS: ["example.com."]
+    extraDnsNames: []
+    # Nodes whose Ready condition isn't True. Nodes younger than ignoreYoungerThanSeconds are skipped,
+    # so autoscaler scale-ups don't flap the check.
+    nodes:
+      enabled: true
+      maxNotReady: 0
+      ignoreYoungerThanSeconds: 300
+
+  # -- Add-on profiles, each reported as its own service.
+  #   enabled: auto  = report only if at least one of its workloads exists in this cluster (default)
+  #            true  = always report; a missing workload is a failing check
+  #            false = never report
+  #   metrics: also scrape the component's Prometheus endpoint (metricsChecks). Off where the component
+  #            doesn't expose metrics by default.
+  # Check syntax is documented in the README ("Check reference"). Override any field with your own values.
+  profiles:
+    coredns:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: kube-system, name: coredns}
+      metricsChecks:
+        - metrics: {namespace: kube-system, selector: k8s-app=kube-dns, port: 9153}
+          forward: [coredns_dns_requests_total, coredns_dns_responses_total, coredns_panics_total]
+          max: {coredns_panics_total: 0}
+
+    kube-dns:  # GKE's DNS (when not using Cloud DNS)
+      enabled: auto
+      metrics: false
+      checks:
+        - {kind: deployment, namespace: kube-system, name: kube-dns}
+      metricsChecks: []
+
+    kube-proxy:
+      enabled: auto
+      metrics: false
+      checks:
+        - {kind: daemonset, namespace: kube-system, name: kube-proxy}
+      metricsChecks: []
+
+    cilium:
+      enabled: auto
+      metrics: false  # needs prometheus.enabled=true and operator.prometheus.enabled=true in Cilium's Helm values
+      checks:
+        - {kind: daemonset, namespace: kube-system, name: cilium}
+        - {kind: deployment, namespace: kube-system, name: cilium-operator}
+      metricsChecks:
+        - metrics: {namespace: kube-system, selector: k8s-app=cilium, port: 9962}
+          forward: [cilium_drop_count_total, cilium_endpoint_state, cilium_bpf_map_pressure, cilium_node_health_connectivity_status]
+          max: {cilium_bpf_map_pressure: 0.9}
+        - metrics: {namespace: kube-system, selector: io.cilium/app=operator, port: 9963}
+          forward: [cilium_operator_ipam_ips]
+
+    fluxcd:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: flux-system, name: source-controller}
+        - {kind: deployment, namespace: flux-system, name: kustomize-controller}
+        - {kind: deployment, namespace: flux-system, name: helm-controller}
+        - {kind: deployment, namespace: flux-system, name: notification-controller}
+      metricsChecks:
+        - metrics: {namespace: flux-system, selector: "app in (source-controller,kustomize-controller,helm-controller,notification-controller)", port: 8080}
+          forward: [controller_runtime_reconcile_errors_total, controller_runtime_reconcile_total, workqueue_depth]
+          max: {workqueue_depth: 100}
+
+    argocd:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: argocd, name: argocd-server}
+        - {kind: deployment, namespace: argocd, name: argocd-repo-server}
+        - {kind: deployment, namespace: argocd, name: argocd-redis}
+        - {kind: statefulset, namespace: argocd, name: argocd-application-controller}
+      metricsChecks:
+        - metrics: {namespace: argocd, selector: app.kubernetes.io/name=argocd-application-controller, port: 8082}
+          forward: [argocd_app_info, argocd_app_sync_total, workqueue_depth]
+          max: {workqueue_depth: 100}
+        - metrics: {namespace: argocd, selector: app.kubernetes.io/name=argocd-repo-server, port: 8084}
+          forward: [argocd_git_request_total]
+
+    traefik:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: traefik, name: traefik}
+      metricsChecks:
+        - metrics: {namespace: traefik, selector: app.kubernetes.io/name=traefik, port: 9100}
+          forward: [traefik_entrypoint_requests_total, traefik_open_connections, traefik_config_reloads_total]
+
+    external-secrets:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: external-secrets, name: external-secrets}
+        - {kind: deployment, namespace: external-secrets, name: external-secrets-webhook}
+        - {kind: deployment, namespace: external-secrets, name: external-secrets-cert-controller}
+      metricsChecks:
+        - metrics: {namespace: external-secrets, selector: app.kubernetes.io/name=external-secrets, port: 8080}
+          forward:
+            - 'externalsecret_status_condition{condition="Ready",status="False"}'
+            - 'clustersecretstore_status_condition{condition="Ready",status="False"}'
+            - externalsecret_sync_calls_error
+            - externalsecret_sync_calls_total
+          max: {'clustersecretstore_status_condition{condition="Ready",status="False"}': 0}
+
+    external-dns:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: external-dns, name: external-dns}
+      metricsChecks:
+        - metrics: {namespace: external-dns, selector: app.kubernetes.io/name=external-dns, port: 7979}
+          forward: [external_dns_source_errors_total, external_dns_registry_errors_total, external_dns_source_endpoints_total, external_dns_registry_endpoints_total]
+          max_age: {external_dns_controller_last_sync_timestamp_seconds: 600}
+
+    karpenter:
+      enabled: auto
+      metrics: true
+      checks:
+        - {kind: deployment, namespace: kube-system, name: karpenter}
+      metricsChecks:
+        - metrics: {namespace: kube-system, selector: app.kubernetes.io/name=karpenter, port: 8080}
+          forward: [karpenter_nodepools_usage, karpenter_nodepools_limit, karpenter_cloudprovider_errors_total, karpenter_nodeclaims_created_total, karpenter_nodeclaims_disrupted_total, karpenter_interruption_received_messages_total]
+
+  # -- Your own services, same shape as a profile: {name: {enabled: true|auto, checks: [...]}}
+  extraServices: {}
+
+  # -- One replica per node where possible. "hard" refuses to co-locate (extra replicas stay Pending on
+  # clusters with fewer nodes than replicas).
+  antiAffinity: soft
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {memory: 64Mi}
+  nodeSelector: {}
+  tolerations: []
+  priorityClassName: ""
+
+statusPage:
+  # -- Run the status page. One per Splunk org is enough: it shows every cluster.
+  enabled: false
+  image:
+    repository: ghcr.io/jthiatt/k8s-health-status-page
+    tag: ""
+    pullPolicy: IfNotPresent
+  title: Cluster status
+  splunk:
+    realm: ""  # required when enabled, e.g. us1, eu0
+    # -- Splunk API token (read is enough). Either give it here (the chart creates a Secret), or point at a
+    # Secret you manage.
+    apiToken: ""
+    existingSecret: ""
+    existingSecretKey: token
+  # -- Only list incidents from detectors whose name contains this ("" = all detectors in the org).
+  detectorMatch: k8s-health
+  historyDays: 30
+  incidentDays: 7
+  service:
+    type: ClusterIP
+    port: 80
+  # -- The page has no login of its own: expose it only behind your SSO/auth, or keep it internal.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []  # [status.example.com]
+    tls: []
+  resources:
+    requests: {cpu: 20m, memory: 96Mi}
+    limits: {memory: 256Mi}
+  nodeSelector: {}
+  tolerations: []
+
+fullnameOverride: ""

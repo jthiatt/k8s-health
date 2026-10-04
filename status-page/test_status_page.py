@@ -34,11 +34,11 @@ assert h == [None, 0.75, 0.0], h
 
 # incidents: start = first event, resolved = last event (anomalyStateUpdateTimestamp can lag, as seen in Splunk)
 status_page.api = lambda path, **_: [
-    {"detectorName": "EKS core services", "detectLabel": "EKS service down", "severity": "Critical", "active": False,
+    {"detectorName": "k8s-health core services", "detectLabel": "Service down", "severity": "Critical", "active": False,
      "detectorId": "D1", "anomalyState": "OK", "anomalyStateUpdateTimestamp": now - 180_000,
      "events": [{"anomalyState": "OK", "timestamp": now - 60_000}, {"anomalyState": "ANOMALOUS", "timestamp": now - 180_000}]},
     {"detectorName": "book-tracker SLO", "detectLabel": "x", "active": True, "events": [{"timestamp": now}]}]
-status_page.DETECTOR_MATCH = "eks"
+status_page.DETECTOR_MATCH = "k8s-health"
 (inc,) = status_page.incidents(now)
 assert inc["started_ms"] == now - 180_000 and inc["updated_ms"] == now - 60_000 and not inc["active"], inc
 assert inc["url"] == "https://app.us1.observability.splunkcloud.com/#/detector/v2/D1/edit?detectorSignalFlowEditor=1", inc["url"]
@@ -48,12 +48,12 @@ for svc in s.values():
     svc.update(history=[None, 0.995, 1.0], uptime=0.9975)
 status_page.status = lambda: {"generated_ms": now, "overall": "down", "headline": "1 service down",
                               "days": [today - 2 * DAY, today - DAY, today], "clusters": {"c1": s},
-                              "incidents": [{"detector": "EKS core services", "rule": "EKS service down", "severity": "Critical",
+                              "incidents": [{"detector": "k8s-health core services", "rule": "Service down", "severity": "Critical",
                                              "active": True, "started_ms": now - 60000, "updated_ms": now, "url": "#"}]}
 client = status_page.app.test_client()
 page = client.get("/").get_data(as_text=True)
 for text in ("1 service down", "cilium", "Operation in last", "99.75%", "bar partial", "bar nodata",
-             "EKS service down", "ongoing since", "<code>deploy</code>"):
+             "Service down", "ongoing since", "<title>Cluster status</title>", "<code>deploy</code>"):
     assert text in page, text
 assert client.get("/api/status").json["headline"] == "1 service down"
 assert client.get("/healthz").get_data(as_text=True) == "ok"

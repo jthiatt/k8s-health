@@ -15,7 +15,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="refresh" content="{{ interval }}">
-  <title>EKS Status</title>
+  <title>{{ title }}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -50,7 +50,7 @@
       {% endfor %}
     </section>
     {% else %}
-    <p class="muted empty">No agent has reported yet. Check that the agents are running and sending <code>eks.health.up</code>.</p>
+    <p class="muted empty">No agent has reported yet. Check that the agents are running and sending <code>{{ metric }}</code>.</p>
     {% endfor %}
 
     <hr>
