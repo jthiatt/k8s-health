@@ -2,8 +2,8 @@ apiVersion: v2
 name: k8s-health
 description: Health checks for any Kubernetes cluster's core services, reported to Splunk Observability Cloud, with an optional status page.
 type: application
-version: 0.1.2
-appVersion: "0.1.2"
+version: 0.2.0
+appVersion: "0.2.0"
 home: https://github.com/jthiatt/k8s-health
 sources:
   - https://github.com/jthiatt/k8s-health
