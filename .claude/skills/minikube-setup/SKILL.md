@@ -186,24 +186,38 @@ terraform apply
 - The apply prints `dashboard_url`. Open it: the **Cluster health** dashboard should show `minikube`.
 - Two detectors now exist: `k8s-health core services` and `k8s-health agent deadman`.
 
-## Phase 7: Prove it works (offer this; about 5 minutes)
+## Phase 7: Prove it works (offer this; about 10 minutes)
 
-Show a real outage end to end:
+Run the core test tier. It reads every result from the status page, so it exercises the whole path:
+agent → collector → Splunk → page, plus the alerts if phase 6 was done.
 
 ```bash
-kubectl -n kube-system scale deploy coredns --replicas=0
+python3 dev/minikube/test.py core     # set HELM=/path/to/helm if the default helm is older than 3.14
 ```
 
-- Within about 2 minutes the status page shows `coredns` down, and with Terraform applied a **Service down**
-  incident opens.
-- Restore with `--replicas=1`. The page goes green and the incident resolves.
-- Don't leave CoreDNS down: other things in the cluster need it.
+It checks:
+- the agents and their leader;
+- a clean check cycle, and all core services up on the page;
+- leader failover, with no gap in the data;
+- an outage end to end. It adds a small `k8s-health-canary` service to the release (auto mode, so it's harmless
+  when absent), breaks it, and expects "down" on the page plus a **Service down** incident, then recovery.
 
-To try **add-on profiles**, install any supported add-on from its official chart (the README's
-**What gets checked** table lists them). The agent finds it automatically within a cycle.
-- fluentd needs `dev/minikube/fluentd-values.yaml`: the chart's default Elasticsearch output would otherwise keep
-  **fluentd output failing** firing.
-- Argo CD has a demo app in `dev/minikube/argocd-app.yaml`.
+`--deadman` also stops every agent to test the dead man's switch. That takes about 10 minutes more and **sends a
+real alert** to the `deadman_notifications` recipients, so tell the user first.
+
+Don't demo an outage by scaling CoreDNS to 0. The collector also needs DNS to reach Splunk, so the page goes
+stale instead of showing CoreDNS down.
+
+To try **add-on profiles**, use the add-on tier. It tests one add-on at a time: install it from its official
+chart, check it's detected, break one of its workloads, restore it, and uninstall it.
+
+```bash
+python3 dev/minikube/test.py list               # the add-ons it knows
+python3 dev/minikube/test.py addons keda istio  # or no names for all of them (about 1.5 hours)
+python3 dev/minikube/test.py cleanup            # remove every add-on and its CRDs
+```
+
+Don't install many add-ons at once on minikube. The API server and etcd slow down enough that checks time out.
 
 ## Troubleshooting
 
@@ -218,6 +232,7 @@ To try **add-on profiles**, install any supported add-on from its official chart
 | Everything goes `stale` at once, and the deadman fires | minikube is frozen (the Mac slept) or the agents aren't running. Run `minikube status` and check the leader's logs. |
 | No collector data at all; `kubelet_stats` TLS errors | The values file wasn't applied: install with `-f dev/minikube/otel-values.yaml`. |
 | An add-on is missing from the page | It's not installed, or it uses non-default names or namespaces. The leader logs `not installed, skipping`. See the README's Troubleshooting section. |
+| Many checks fail at once with `timed out`, and etcd logs `apply request took too long` | minikube is overloaded: too many add-ons installed at once, or Docker Desktop has more CPUs than the host has physical cores. Run `test.py cleanup`. In Docker Desktop → Resources, set CPUs to at most the physical core count, and memory at least 2 GB above minikube's. |
 | Falco crashes with `BPF_TRACE_RAW_TP is not supported` | Docker Desktop's kernel can't run Falco's syscall driver. Fine for real clusters; skip Falco on minikube. |
 
 For anything else, see the README's **Troubleshooting** section.

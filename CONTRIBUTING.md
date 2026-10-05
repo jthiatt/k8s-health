@@ -52,9 +52,10 @@ kubectl -n splunk-otel create secret generic splunk-otel-collector --from-litera
 helm repo add splunk-otel-collector-chart https://signalfx.github.io/splunk-otel-collector-chart
 helm install otel splunk-otel-collector-chart/splunk-otel-collector -n splunk-otel -f dev/minikube/otel-values.yaml --wait
 
-# 2. Build images straight into minikube, tagged as the chart expects
-minikube image build -t ghcr.io/jthiatt/k8s-health-agent:0.1.0 agent
-minikube image build -t ghcr.io/jthiatt/k8s-health-status-page:0.1.0 status-page
+# 2. Build images straight into minikube, tagged as the chart expects (its appVersion)
+v=$(sed -n 's/^appVersion: "\(.*\)"/\1/p' charts/k8s-health/Chart.yaml)
+minikube image build -t ghcr.io/jthiatt/k8s-health-agent:$v agent
+minikube image build -t ghcr.io/jthiatt/k8s-health-status-page:$v status-page
 
 # 3. Install from your checkout
 kubectl create namespace k8s-health
@@ -69,7 +70,19 @@ helm install k8s-health charts/k8s-health -n k8s-health --set clusterName=miniku
 - `dev/minikube/otel-values.yaml` works around two minikube-only collector issues, both commented there.
 - If your machine sleeps, minikube's API and node take a minute or two to recover after it wakes.
 
-**Exercising an add-on:**
+**Tests on minikube:** `dev/minikube/test.py` runs them in two tiers (set `HELM=` if your default `helm` is older than 3.14):
+
+```bash
+python3 dev/minikube/test.py core              # agent -> Splunk -> status page, outage + alert, failover (~10 min)
+python3 dev/minikube/test.py core --deadman    # plus the dead man's switch (~10 min more; sends a real alert)
+python3 dev/minikube/test.py addons keda istio # install, detect, break, restore, uninstall, one add-on at a time
+python3 dev/minikube/test.py addons            # every add-on (about 1.5 hours)
+python3 dev/minikube/test.py cleanup           # remove every add-on and its CRDs
+```
+
+Run the core tier on a cluster without add-ons: minikube gets slow with many of them at once. To add a profile to the add-on tier, add an entry to `ADDONS` in the script: how to install it, and which workload to break.
+
+**Exercising an add-on by hand:**
 - **Install the component:** for example Argo CD from its upstream manifests. Then give it an app with `kubectl apply -f dev/minikube/argocd-app.yaml`, so its app metrics exist.
 - **Check detection:** the leader logs `now installed, reporting` for the service.
 - **Test the down path:** scale one of the component's workloads to 0.
