@@ -56,6 +56,15 @@ tests:
       - equal: {path: spec.replicas, value: 1}
       - equal: {path: spec.template.spec.automountServiceAccountToken, value: false}
       - equal: {path: "spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem", value: true}
+  - it: gives the page time to boot before liveness can restart it
+    set:
+      statusPage.enabled: true
+      statusPage.splunk.realm: us1
+      statusPage.splunk.existingSecret: s
+    documentIndex: 0
+    asserts:
+      - equal: {path: "spec.template.spec.containers[0].startupProbe.failureThreshold", value: 60}
+      - equal: {path: "spec.template.spec.containers[0].startupProbe.httpGet.path", value: /healthz}
   - it: adds an Ingress when enabled
     set:
       statusPage.enabled: true

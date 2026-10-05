@@ -53,6 +53,9 @@ spec:
             - {name: DETECTOR_MATCH, value: {{ $sp.detectorMatch | quote }}}
             - {name: HISTORY_DAYS, value: {{ $sp.historyDays | quote }}}
             - {name: INCIDENT_DAYS, value: {{ $sp.incidentDays | quote }}}
+          # Up to 2 minutes to boot before liveness applies: on a busy node gunicorn can take 30 s or more to
+          # start, and liveness alone (no delay) killed it mid-boot.
+          startupProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 2, failureThreshold: 60}
           readinessProbe: {httpGet: {path: /healthz, port: http}}
           livenessProbe: {httpGet: {path: /healthz, port: http}}
           securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
