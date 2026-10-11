@@ -1,0 +1,8 @@
+# gitleaks (CI's "secrets" job): the default rules, plus one allowlisted false positive.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Kubernetes Secret names in the docs (e.g. existingSecret=k8s-health-splunk-api), not secret values"
+regexTarget = "match"
+regexes = ['''existingSecret=k8s-health-splunk-api''']

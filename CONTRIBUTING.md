@@ -22,6 +22,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.2.1 --verify=false   # once
 helm unittest charts/k8s-health
 helm lint charts/k8s-health --set clusterName=dev
+gitleaks git --config .gitleaks.toml --redact .   # no secrets anywhere in the history (https://github.com/gitleaks/gitleaks)
 (cd splunk && terraform fmt -check -recursive && terraform init -backend=false && terraform validate && tflint --init --config=../.tflint.hcl && tflint --config=../.tflint.hcl)
 ```
 
